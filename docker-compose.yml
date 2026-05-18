@@ -1,0 +1,40 @@
+version: "3.9"
+
+services:
+
+  # ── Backend FastAPI ──────────────────────────────────────────────────────────
+  backend:
+    build: .
+    image: mvp-ayudantes-backend:latest
+    container_name: mvp-ayudantes-backend
+    expose:
+      - "8000"          # Solo expuesto internamente; nginx actúa como proxy
+    env_file:
+      - .env
+    environment:
+      - ENVIRONMENT=PROD
+      - PYTHONIOENCODING=utf-8
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./credentials:/app/credentials:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── Frontend nginx ───────────────────────────────────────────────────────────
+  frontend:
+    image: nginx:alpine
+    container_name: mvp-ayudantes-frontend
+    ports:
+      - "80:80"         # Acceder en http://localhost
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped

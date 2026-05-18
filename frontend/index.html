@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Asignación de Ayudantes — Ingeniería UniAndes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans+Condensed:wght@400;600&display=swap" rel="stylesheet" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23006b59'/><text x='16' y='22' text-anchor='middle' font-family='sans-serif' font-weight='700' font-size='14' fill='white'>IA</text></svg>" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="ambient ambient-a"></div>
+<div class="ambient ambient-b"></div>
+
+<div class="app-shell">
+
+  <!-- ── Top navigation ── -->
+  <nav class="topbar">
+    <div class="topbar-brand">
+      <div class="topbar-logo">IA</div>
+      <div>
+        <div class="topbar-title">Sistema de Ayudantes</div>
+        <div class="topbar-sub">Facultad de Ingeniería · Universidad de los Andes</div>
+      </div>
+    </div>
+    <div class="topbar-spacer"></div>
+    <div class="topbar-controls">
+      <div class="mode-toggle">
+        <button id="btnDemo"   class="active">Demo</button>
+        <button id="btnSheets">Google Sheets</button>
+      </div>
+      <button id="btnRun"    class="btn btn-accent">Consultar</button>
+      <button id="btnAI"     class="btn btn-ai"    style="display:none">Aplicar Modo IA</button>
+      <button id="btnExport" class="btn btn-ghost" style="display:none">Exportar XLSX</button>
+      <button id="btnKpis"   class="btn btn-ghost" style="display:none">Métricas IA</button>
+      <div id="statusBadge" class="badge badge-checking">
+        <span class="badge-dot"></span>
+        <span id="statusText">Conectando…</span>
+      </div>
+    </div>
+  </nav>
+
+  <div class="body-wrap">
+
+    <!-- ── Sidebar ── -->
+    <aside class="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-heading">Filtros de búsqueda</div>
+
+        <!-- Escuela -->
+        <div class="field">
+          <label for="fEscuela">Escuela / Facultad</label>
+          <select id="fEscuela">
+            <option value="">Todas las escuelas</option>
+          </select>
+        </div>
+
+        <!-- Course picker -->
+        <div class="field">
+          <label>Curso</label>
+          <div class="curso-picker" id="cursoPicker">
+            <div class="curso-input-wrap">
+              <input type="text" id="fCursoInput"
+                     placeholder="Buscar por código o nombre…"
+                     autocomplete="off" spellcheck="false" />
+              <button class="curso-clear" id="cursoClear" aria-label="Limpiar" style="display:none">✕</button>
+            </div>
+            <div class="curso-dropdown" id="cursoDropdown" style="display:none"></div>
+          </div>
+        </div>
+
+        <!-- Nota mínima del ramo -->
+        <div class="field">
+          <label>Nota mínima del ramo</label>
+          <div class="range-wrap">
+            <div class="range-header">
+              <span style="font-size:0.78rem;color:var(--ink-faint)">1.0 → 7.0</span>
+              <span class="range-val" id="notaMinimaVal">5.0</span>
+            </div>
+            <input type="range" id="fNotaMinima" min="1.0" max="7.0" step="0.1" value="5.0" />
+          </div>
+        </div>
+
+        <!-- PGA mínimo -->
+        <div class="field">
+          <label>Promedio general mínimo (PGA)</label>
+          <div class="range-wrap">
+            <div class="range-header">
+              <span style="font-size:0.78rem;color:var(--ink-faint)">1.0 → 7.0</span>
+              <span class="range-val" id="pgaMinimaVal">0.0</span>
+            </div>
+            <input type="range" id="fPgaMinima" min="0.0" max="7.0" step="0.1" value="0.0" />
+          </div>
+        </div>
+
+        <!-- Días disponibles (multi-select + per-day window) -->
+        <div class="field">
+          <label>Días disponibles</label>
+          <div class="day-btns">
+            <button class="day-btn" data-day="LUNES">L</button>
+            <button class="day-btn" data-day="MARTES">M</button>
+            <button class="day-btn" data-day="MIERCOLES">X</button>
+            <button class="day-btn" data-day="JUEVES">J</button>
+            <button class="day-btn" data-day="VIERNES">V</button>
+            <button class="day-btn" data-day="SABADO">S</button>
+          </div>
+          <!-- Per-day time windows inserted here dynamically -->
+          <div id="dayWindows" class="day-windows"></div>
+          <p class="field-hint">Ventana horaria opcional por día.</p>
+        </div>
+
+        <!-- Experiencia previa (cualquier ramo) -->
+        <div class="field">
+          <label for="fExAyudante">¿Ayudante previamente?</label>
+          <select id="fExAyudante">
+            <option value="">Todos</option>
+            <option value="si">Sí — fue ayudante en algún ramo</option>
+            <option value="no">No — nunca ha sido ayudante</option>
+          </select>
+          <p class="field-hint">Considera ayudantías en cualquier ramo y período.</p>
+        </div>
+
+        <button id="btnClear" class="btn btn-ghost btn-full btn-sm">Limpiar filtros</button>
+      </div>
+
+      <div id="sidebarCount" class="sidebar-count" style="display:none">
+        Mostrando <strong id="countFiltered">0</strong> de <strong id="countTotal">0</strong> candidatos
+      </div>
+    </aside>
+
+    <!-- ── Main content ── -->
+    <main class="main-content">
+
+      <!-- Centered loading panel -->
+      <div id="loadingPanel" class="loading-panel" style="display:none">
+        <div class="loading-spinner"></div>
+        <div class="loading-step-text" id="loadingStepText">Iniciando…</div>
+        <div class="loading-steps">
+          <div class="step-item">
+            <div class="step-dot" id="stepDot1"></div>
+            <div class="step-label">Planillas</div>
+          </div>
+          <div class="step-line" id="stepLine1"></div>
+          <div class="step-item">
+            <div class="step-dot" id="stepDot2"></div>
+            <div class="step-label">Candidatos</div>
+          </div>
+          <div class="step-line" id="stepLine2"></div>
+          <div class="step-item">
+            <div class="step-dot" id="stepDot3"></div>
+            <div class="step-label">Disponibilidad</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <section class="stats-row" id="statsSection" style="display:none">
+        <div class="stat-pill"><strong id="statCandidatos">—</strong><span>candidatos elegibles</span></div>
+        <div class="stat-pill"><strong id="statAsignados">—</strong><span>asignados por ILP</span></div>
+        <div class="stat-pill"><strong id="statSecciones">—</strong><span>secciones cubiertas</span></div>
+      </section>
+
+      <!-- KPI panel -->
+      <section id="kpiSection" style="display:none">
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <p class="kpi-tag">KPI 1</p>
+            <p class="kpi-nombre" id="kpi1Nombre">Capacidad predictiva del modelo</p>
+            <div class="kpi-value" id="kpi1Valor">—</div>
+            <div class="kpi-track">
+              <div class="kpi-fill" id="kpi1Fill" style="width:0%"></div>
+              <div class="kpi-meta-marker" id="kpi1Mark" style="left:0%"></div>
+            </div>
+            <div class="kpi-row-meta"><span id="kpi1Base">Baseline: —</span><span id="kpi1Meta">Meta: —</span></div>
+            <div class="kpi-estado" id="kpi1Estado"></div>
+          </div>
+          <div class="kpi-card">
+            <p class="kpi-tag">KPI 2</p>
+            <p class="kpi-nombre" id="kpi2Nombre">Calidad de desempeño</p>
+            <div class="kpi-value" id="kpi2Valor">—</div>
+            <div class="kpi-track">
+              <div class="kpi-fill" id="kpi2Fill" style="width:0%"></div>
+              <div class="kpi-meta-marker" id="kpi2Mark" style="left:0%"></div>
+            </div>
+            <div class="kpi-row-meta"><span id="kpi2Base">Baseline: —</span><span id="kpi2Meta">Meta: —</span></div>
+            <div class="kpi-estado" id="kpi2Estado"></div>
+          </div>
+          <div class="kpi-card">
+            <p class="kpi-tag">KPI 3</p>
+            <p class="kpi-nombre" id="kpi3Nombre">Cobertura de restricciones</p>
+            <div class="kpi-value" id="kpi3Valor">—</div>
+            <div class="kpi-track">
+              <div class="kpi-fill" id="kpi3Fill" style="width:0%"></div>
+              <div class="kpi-meta-marker" id="kpi3Mark" style="left:0%"></div>
+            </div>
+            <div class="kpi-row-meta"><span id="kpi3Base">Baseline: —</span><span id="kpi3Meta">Meta: —</span></div>
+            <div class="kpi-estado" id="kpi3Estado"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Results -->
+      <section class="results-grid" id="resultsSection" style="display:none">
+
+        <div class="card">
+          <div class="card-header">
+            <h2>Candidatos elegibles</h2>
+            <span id="tableCount" style="font-size:0.82rem;color:var(--ink-faint)"></span>
+          </div>
+          <div class="table-wrap">
+            <table id="candidatesTable">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>RUT / Nombre</th>
+                  <th>Curso</th>
+                  <th>Nota</th>
+                  <th>PGA</th>
+                  <th>Ayudante prev.</th>
+                  <th>Aptitud IA</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="candidatesBody">
+                <tr class="empty-row"><td colspan="8">Consulta los datos para ver los candidatos.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <!-- Pagination -->
+          <div class="pagination" id="paginationSection" style="display:none">
+            <div class="page-size-group">
+              <span class="page-size-label">Mostrar</span>
+              <button class="page-size-btn" data-size="10">10</button>
+              <button class="page-size-btn active" data-size="20">20</button>
+              <button class="page-size-btn" data-size="50">50</button>
+            </div>
+            <div class="page-nav">
+              <button class="btn-page" id="btnPrev">← Ant.</button>
+              <span id="pageInfo" class="page-info">Pág. 1 de 1</span>
+              <button class="btn-page" id="btnNext">Sig. →</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 style="margin-bottom:10px">Variables del modelo RF</h2>
+          <p class="muted">Peso relativo de cada variable en la predicción.</p>
+          <div id="featChart"></div>
+        </div>
+
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<!-- ── Profile Modal ── -->
+<div class="modal-overlay hidden" id="modalOverlay" role="dialog" aria-modal="true">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="modalTitle">Perfil del candidato</h2>
+      <button class="modal-close" id="modalClose" aria-label="Cerrar">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-grid">
+        <div class="info-block">
+          <h3>Datos académicos</h3>
+          <div class="info-row"><span class="label">RUT</span><span class="val" id="mRut">—</span></div>
+          <div class="info-row"><span class="label">Correo</span><a class="email-link" id="mEmail" href="#">—</a></div>
+          <div class="info-row"><span class="label">Curso a ayudar</span><span class="val" id="mCurso">—</span></div>
+          <div class="info-row"><span class="label">Nota en el ramo</span><span class="val" id="mNota">—</span></div>
+          <div class="info-row"><span class="label">Promedio general (PGA)</span><span class="val" id="mPGA">—</span></div>
+          <div class="info-row"><span class="label">Prom. último año (PUA)</span><span class="val" id="mPUA">—</span></div>
+          <div class="info-row"><span class="label">Prom. ramos aprobados</span><span class="val" id="mPRA">—</span></div>
+          <div class="info-row"><span class="label">Ramos inscritos</span><span class="val" id="mCarga">—</span></div>
+          <div class="info-row"><span class="label">Postulante actual</span><span class="val" id="mPostulante">—</span></div>
+          <div class="info-row"><span class="label">Score RF</span><span class="val val-score" id="mScore">—</span></div>
+        </div>
+        <div class="info-block">
+          <h3>Disponibilidad horaria</h3>
+          <div class="sched-grid" id="mSched"></div>
+          <p style="margin-top:8px;font-size:0.76rem;color:var(--ink-faint)">Rojo = tiene clase · Verde = libre ese día</p>
+        </div>
+      </div>
+      <div class="info-block">
+        <h3>Ramos recomendados para ayudar</h3>
+        <div class="ta-list" id="mRecomendaciones"></div>
+        <p style="margin-top:6px;font-size:0.74rem;color:var(--ink-faint)">
+          Ordenados por aptitud · ★ mejor opción
+        </p>
+      </div>
+      <div class="info-block">
+        <h3>Historial como ayudante</h3>
+        <div class="ta-list" id="mTaList"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
