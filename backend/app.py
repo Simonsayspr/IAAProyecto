@@ -29,6 +29,10 @@ from backend.pipeline import (
     run_pipeline_deterministic,
     run_pipeline_ai,
     KPI_METADATA,
+    WEIGHT_PRESETS,
+    AIExplanationGenerator,
+    CurriculumCatalogProcessor,
+    generate_synthetic_name,
 )
 from backend.skills.google_auth import GoogleAuth
 from backend.skills.google_spreadsheet import GoogleSpreadsheetSkill
@@ -167,14 +171,15 @@ def _compute_student_info(
             for dia, slots in nrc_schedule.get(nrc_key, {}).items():
                 student_info[rut]["ocupado"].setdefault(dia, []).extend(slots)
 
-    # ── Historial de ayudantías ───────────────────────────────────────────────
+    # ── Historial de ayudantías + postulaciones actuales ────────────────────
     ACEPTADO = {"aceptado", "aprobado", "activo", "seleccionado"}
     if postulaciones_df is not None and not postulaciones_df.empty:
         pdf = postulaciones_df.copy()
         pdf.columns = [str(c).strip() for c in pdf.columns]
         for _, row in pdf.iterrows():
             rut = str(row.get("RUT", "")).strip()
-            estado = str(row.get("Estado", "")).strip().lower()
+            estado = str(row.get("Estado", "")).strip()
+            estado_lower = estado.lower()
             if not rut:
                 continue
             if rut not in student_info:
@@ -182,11 +187,18 @@ def _compute_student_info(
                     "email": f"{rut}@miuandes.cl",
                     "ocupado": {},
                     "ayudantias_previas": [],
+                    "postulaciones_actuales": [],
                 }
+            if "postulaciones_actuales" not in student_info[rut]:
+                student_info[rut]["postulaciones_actuales"] = []
             correo = str(row.get("Correo", "")).strip()
             if "@" in correo:
                 student_info[rut]["email"] = correo
-            if estado in ACEPTADO:
+
+            profesor = str(row.get("Profesor", "")).strip()
+            tipo_ay = str(row.get("Tipo de ayudante", "")).strip()
+
+            if estado_lower in ACEPTADO:
                 eval_raw = str(row.get("Evaluación", row.get("Evaluacion", ""))).strip()
                 student_info[rut]["ayudantias_previas"].append({
                     "periodo":    str(row.get("Periodo", "")),
@@ -194,8 +206,21 @@ def _compute_student_info(
                     "curso":      str(row.get("Curso", "")),
                     "asignatura": str(row.get("Asignatura", "")),
                     "evaluacion": eval_raw if eval_raw not in ("", "nan", "None") else None,
-                    "tipo":       str(row.get("Tipo de ayudante", "")),
+                    "tipo":       tipo_ay,
+                    "profesor":   profesor,
                 })
+
+            # Postulaciones del periodo actual
+            periodo = str(row.get("Periodo", "")).strip()
+            student_info[rut]["postulaciones_actuales"].append({
+                "periodo":    periodo,
+                "materia":    str(row.get("Materia", "")),
+                "curso":      str(row.get("Curso", "")),
+                "asignatura": str(row.get("Asignatura", "")),
+                "estado":     estado,
+                "tipo":       tipo_ay,
+                "profesor":   profesor,
+            })
 
     return student_info
 
@@ -206,6 +231,8 @@ class PipelineRequest(BaseModel):
     nota_minima: float = 5.0
     max_ayudantias: int = 2
     usar_demo: bool = False
+    weight_preset: Optional[str] = None
+    custom_weights: Optional[dict] = None
 
 
 class ScoreRequest(BaseModel):
@@ -230,7 +257,7 @@ def health():
     sa_ok = bool(global_vars.get("service_account"))
     urls = {
         k: bool(global_vars.get(f"spreadsheet_url_{k}"))
-        for k in ["malla", "promedios", "nrc", "inscritos", "postulaciones"]
+        for k in ["malla", "promedios", "nrc", "inscritos", "postulaciones", "plan_estudios"]
     }
     return HealthResponse(
         status="ok",
@@ -308,6 +335,21 @@ def run(req: PipelineRequest):
                 if "PERIODO" in nrc.columns and not nrc.empty:
                     periodo_actual = str(nrc["PERIODO"].dropna().astype(str).mode().iloc[0])
 
+            # ── Cargar catálogo de plan de estudios (opcional) ─────────────
+            catalog_df = None
+            prerequisites_map = None
+            try:
+                if not req.usar_demo:
+                    cat_raw = _read_one_sheet_optional(creds, "spreadsheet_url_plan_estudios", "Periodo")
+                    if not cat_raw.empty:
+                        cat_proc = CurriculumCatalogProcessor()
+                        catalog_df = cat_proc.load_course_catalog(cat_raw)
+                        prereq_raw = _read_one_sheet_optional(creds, "spreadsheet_url_plan_estudios", "Nueva Malla - Requisitos")
+                        if not prereq_raw.empty:
+                            prerequisites_map = cat_proc.load_prerequisites(prereq_raw)
+            except Exception as e:
+                print(f"  [Info] Catálogo de plan de estudios no disponible: {e}")
+
             # ── Fase 3: cruce determinístico ───────────────────────────────
             yield _sse({"type": "progress", "step": 2, "msg": "Cruzando datos y filtrando candidatos elegibles…"})
 
@@ -319,6 +361,10 @@ def run(req: PipelineRequest):
                 postulaciones_df=post_df,
                 periodo_actual=periodo_actual,
                 nota_minima=req.nota_minima,
+                catalog_df=catalog_df,
+                prerequisites_map=prerequisites_map,
+                weight_preset=req.weight_preset,
+                custom_weights=req.custom_weights,
             )
 
             if not results:
@@ -336,14 +382,47 @@ def run(req: PipelineRequest):
             cursos    = _df_to_records(cursos_df)
             student_info = _compute_student_info(inscritos, nrc, post_df)
 
+            # Compute dashboard stats: count by TA type
+            ta_type_counts = {}
+            if post_df is not None and not post_df.empty:
+                pdf_tmp = post_df.copy()
+                pdf_tmp.columns = [str(c).strip() for c in pdf_tmp.columns]
+                if "Estado" in pdf_tmp.columns and "Tipo de ayudante" in pdf_tmp.columns:
+                    accepted_mask = pdf_tmp["Estado"].str.strip().str.lower().isin(
+                        {"aceptado", "aprobado", "activo", "seleccionado"},
+                    )
+                    accepted = pdf_tmp[accepted_mask]
+                    ta_type_counts = (
+                        accepted["Tipo de ayudante"]
+                        .fillna("Sin tipo").str.strip()
+                        .value_counts().to_dict()
+                    )
+
+            # Professor info from NRC
+            profesor_map = {}
+            if not nrc.empty:
+                ndf_tmp = nrc.copy()
+                ndf_tmp.columns = [re.sub(r"\s+", " ", str(c).strip().upper()) for c in ndf_tmp.columns]
+                for _, row in ndf_tmp.drop_duplicates(subset=["NRC"], keep="first").iterrows():
+                    nrc_key = str(row.get("NRC", "")).strip()
+                    prof = str(row.get("PROFESOR", "")).strip()
+                    rut_prof = str(row.get("RUT PROFESOR", "")).strip()
+                    if nrc_key and prof and prof not in ("", "nan", "None"):
+                        profesor_map[nrc_key] = {
+                            "nombre": prof,
+                            "rut": rut_prof if rut_prof not in ("", "nan", "None") else "",
+                        }
+
             candidates_payload = {
-                "type":         "candidates_ready",
-                "candidates":   _df_to_records(candidates_df),
-                "student_info": student_info,
-                "cursos":       cursos,
-                "n_candidatos": len(candidates_df),
-                "n_asignados":  0,
-                "n_secciones":  int(candidates_df["NRC"].nunique()) if "NRC" in candidates_df.columns else 0,
+                "type":            "candidates_ready",
+                "candidates":      _df_to_records(candidates_df),
+                "student_info":    student_info,
+                "cursos":          cursos,
+                "n_candidatos":    len(candidates_df),
+                "n_asignados":     0,
+                "n_secciones":     int(candidates_df["NRC"].nunique()) if "NRC" in candidates_df.columns else 0,
+                "ta_type_counts":  ta_type_counts,
+                "profesor_map":    profesor_map,
             }
             yield _sse(candidates_payload)
             _cache["last"] = {**candidates_payload, "type": "result"}
@@ -377,9 +456,9 @@ def score_pipeline(req: ScoreRequest):
 
             candidates_df = pd.DataFrame(req.candidates)
             # Restaurar tipos numéricos que JSON convierte a object
-            for col in ["NOTA_RAMO", "PGA", "PUA", "PROM_APROBADOS", "SCORE",
+            for col in ["NOTA_RAMO", "PGA", "SCORE",
                         "N_VECES_AYUDANTE", "PROM_EVAL_PREVIA", "CARGA_ACTUAL",
-                        "AYUDANTES_REQUERIDOS"]:
+                        "AYUDANTES_REQUERIDOS", "AVANCE_MALLA", "N_ACEPTADAS_ACTUAL"]:
                 if col in candidates_df.columns:
                     candidates_df[col] = pd.to_numeric(candidates_df[col], errors="coerce")
             for col in ["EXPERIENCIA_PREVIA", "POSTULANTE_ACTUAL"]:
@@ -439,28 +518,33 @@ def last_result():
 
 
 COLS_EXPORT = [
-    "RUT", "MATERIA", "CURSO", "TITULO", "NRC",
-    "NOTA_RAMO", "PGA", "PUA", "PROM_APROBADOS",
+    "RUT", "NOMBRE_COMPLETO", "MATERIA", "CURSO", "TITULO", "NRC",
+    "NOTA_RAMO", "PGA", "AVANCE_MALLA",
     "N_VECES_AYUDANTE", "PROM_EVAL_PREVIA", "POSTULANTE_ACTUAL",
-    "CARGA_ACTUAL", "SCORE", "ASIGNADO",
+    "ESTADO_POSTULACION", "TIPO_AYUDANTE_POST", "N_ACEPTADAS_ACTUAL",
+    "CARGA_ACTUAL", "SCORE", "ASIGNADO", "ES_CURSO_NUEVO",
 ]
 
 COLS_LABELS = {
     "RUT": "RUT",
+    "NOMBRE_COMPLETO": "Nombre",
     "MATERIA": "Materia",
     "CURSO": "Curso",
     "TITULO": "Asignatura",
     "NRC": "NRC",
     "NOTA_RAMO": "Nota en el ramo",
     "PGA": "Promedio general (PGA)",
-    "PUA": "Promedio ultimo anio",
-    "PROM_APROBADOS": "Prom. ramos aprobados",
+    "AVANCE_MALLA": "Avance malla curricular",
     "N_VECES_AYUDANTE": "Veces ayudante previo",
     "PROM_EVAL_PREVIA": "Prom. evaluacion previa",
     "POSTULANTE_ACTUAL": "Es postulante actual",
+    "ESTADO_POSTULACION": "Estado postulacion",
+    "TIPO_AYUDANTE_POST": "Tipo ayudante postulado",
+    "N_ACEPTADAS_ACTUAL": "Ayudantias aceptadas (periodo)",
     "CARGA_ACTUAL": "Ramos inscritos actuales",
-    "SCORE": "Score RF",
+    "SCORE": "Score",
     "ASIGNADO": "Asignado ILP",
+    "ES_CURSO_NUEVO": "Curso nuevo (inferido)",
 }
 
 
@@ -501,6 +585,12 @@ def export_filtered(req: ExportRequest):
 @app.get("/kpi/metadata", tags=["KPIs"])
 def kpi_metadata():
     return KPI_METADATA
+
+
+@app.get("/weights/presets", tags=["Configuración"])
+def weight_presets():
+    """Retorna los presets de pesos disponibles para el scoring."""
+    return WEIGHT_PRESETS
 
 
 if __name__ == "__main__":

@@ -125,6 +125,21 @@
         <button id="btnClear" class="btn btn-ghost btn-full btn-sm">Limpiar filtros</button>
       </div>
 
+      <div class="sidebar-section" id="weightPresetSection">
+        <div class="sidebar-heading">Pesos del modelo IA</div>
+        <div class="field">
+          <label for="fWeightPreset">Perfil de evaluaci&oacute;n</label>
+          <select id="fWeightPreset">
+            <option value="balanced">Equilibrado</option>
+            <option value="academic">Rendimiento acad&eacute;mico</option>
+            <option value="experience">Experiencia previa</option>
+            <option value="curriculum">Avance curricular</option>
+          </select>
+          <p class="field-hint" id="presetDescription">Balance entre nota, promedio, experiencia y avance curricular</p>
+        </div>
+        <div class="weight-bars" id="weightBars"></div>
+      </div>
+
       <div id="sidebarCount" class="sidebar-count" style="display:none">
         Mostrando <strong id="countFiltered">0</strong> de <strong id="countTotal">0</strong> candidatos
       </div>
@@ -160,6 +175,14 @@
         <div class="stat-pill"><strong id="statCandidatos">—</strong><span>candidatos elegibles</span></div>
         <div class="stat-pill"><strong id="statAsignados">—</strong><span>asignados por ILP</span></div>
         <div class="stat-pill"><strong id="statSecciones">—</strong><span>secciones cubiertas</span></div>
+      </section>
+
+      <!-- TA type breakdown -->
+      <section class="stats-row stats-row-secondary" id="taTypeSection" style="display:none">
+        <div class="stat-pill stat-pill-sm"><strong id="statDocente">0</strong><span>Docente</span></div>
+        <div class="stat-pill stat-pill-sm"><strong id="statCorreccion">0</strong><span>Correcci&oacute;n</span></div>
+        <div class="stat-pill stat-pill-sm"><strong id="statLaboratorio">0</strong><span>Laboratorio</span></div>
+        <div class="stat-pill stat-pill-sm"><strong id="statOtroTipo">0</strong><span>Otro tipo</span></div>
       </section>
 
       <!-- KPI panel -->
@@ -272,17 +295,24 @@
           <div class="info-row"><span class="label">Curso a ayudar</span><span class="val" id="mCurso">—</span></div>
           <div class="info-row"><span class="label">Nota en el ramo</span><span class="val" id="mNota">—</span></div>
           <div class="info-row"><span class="label">Promedio general (PGA)</span><span class="val" id="mPGA">—</span></div>
-          <div class="info-row"><span class="label">Prom. último año (PUA)</span><span class="val" id="mPUA">—</span></div>
-          <div class="info-row"><span class="label">Prom. ramos aprobados</span><span class="val" id="mPRA">—</span></div>
+          <div class="info-row"><span class="label">Avance curricular</span><span class="val" id="mAvance">—</span></div>
           <div class="info-row"><span class="label">Ramos inscritos</span><span class="val" id="mCarga">—</span></div>
           <div class="info-row"><span class="label">Postulante actual</span><span class="val" id="mPostulante">—</span></div>
-          <div class="info-row"><span class="label">Score RF</span><span class="val val-score" id="mScore">—</span></div>
+          <div class="info-row"><span class="label">Estado postulaci&oacute;n</span><span class="val" id="mEstadoPost">—</span></div>
+          <div class="info-row"><span class="label">Tipo ayudante postulado</span><span class="val" id="mTipoAyPost">—</span></div>
+          <div class="info-row"><span class="label">Ayudant&iacute;as aceptadas (per&iacute;odo)</span><span class="val" id="mNAceptadas">—</span></div>
+          <div class="info-row"><span class="label">Profesor del curso</span><span class="val" id="mProfesor">—</span></div>
+          <div class="info-row"><span class="label">Score</span><span class="val val-score" id="mScore">—</span></div>
         </div>
         <div class="info-block">
           <h3>Disponibilidad horaria</h3>
           <div class="sched-grid" id="mSched"></div>
           <p style="margin-top:8px;font-size:0.76rem;color:var(--ink-faint)">Rojo = tiene clase · Verde = libre ese día</p>
         </div>
+      </div>
+      <div class="info-block" id="mAiExplanationBlock" style="display:none">
+        <h3>Explicaci&oacute;n de la recomendaci&oacute;n IA</h3>
+        <div class="ai-explanation-card" id="mAiExplanation"></div>
       </div>
       <div class="info-block">
         <h3>Ramos recomendados para ayudar</h3>

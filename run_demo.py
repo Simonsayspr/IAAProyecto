@@ -134,6 +134,28 @@ def generate_demo_data(n_alumnos: int = 120, seed: int = 42) -> tuple:
         })
     promedios_df = pd.DataFrame(prom_rows)
 
+    # ── Profesores sintéticos ──────────────────────────────────────────────────
+    _PROF_NOMBRES = [
+        "GONZALEZ/CARLOS", "MARTINEZ/ANA", "LOPEZ/FERNANDO", "RODRIGUEZ/MARIA",
+        "SANCHEZ/PABLO", "TORRES/LAURA", "HERRERA/DIEGO", "MORALES/VALENTINA",
+        "DIAZ/ROBERTO", "REYES/DANIELA", "MUNOZ/SEBASTIAN", "FUENTES/CAROLINA",
+    ]
+    _PROF_EMAILS = [
+        "cgonzalez@miuandes.cl", "amartinez@miuandes.cl", "flopez@miuandes.cl",
+        "mrodriguez@miuandes.cl", "psanchez@miuandes.cl", "ltorres@miuandes.cl",
+        "dherrera@miuandes.cl", "vmorales@miuandes.cl", "rdiaz@miuandes.cl",
+        "dreyes@miuandes.cl", "smunoz@miuandes.cl", "cfuentes@miuandes.cl",
+    ]
+
+    # Asignar un profesor a cada curso
+    prof_por_curso = {}
+    for idx, (mat, cur, tit) in enumerate(cursos_base):
+        pi = idx % len(_PROF_NOMBRES)
+        prof_por_curso[(mat, cur)] = {
+            "nombre": _PROF_NOMBRES[pi],
+            "email": _PROF_EMAILS[pi],
+        }
+
     # ── NRC (secciones del semestre actual 202610) ───────────────────────────
     nrc_rows = []
     nrc_id = 5000
@@ -145,6 +167,7 @@ def generate_demo_data(n_alumnos: int = 120, seed: int = 42) -> tuple:
         {"MARTES": "12:30 -14:20", "VIERNES": "12:30 -14:20"},
     ]
     for mat, cur, tit in cursos_base:
+        prof = prof_por_curso.get((mat, cur), {"nombre": "DOCENTE/DEMO", "email": "demo@miuandes.cl"})
         for secc in range(1, 4):
             horario = np.random.choice(horarios_posibles)
             inscritos = np.random.randint(20, 55)
@@ -172,7 +195,7 @@ def generate_demo_data(n_alumnos: int = 120, seed: int = 42) -> tuple:
                 "SALA": f"C-{np.random.randint(100, 300)}",
                 "TIPO": "CLAS",
                 "RUT PROFESOR": np.random.randint(10000000, 19999999),
-                "PROFESOR": "APELLIDO/NOMBRE",
+                "PROFESOR": prof["nombre"],
                 "CUPOS": 60,
                 "INSCRITOS": inscritos,
                 "% INSCRITOS / CUPOS": f"{round(inscritos/60*100)}%",
@@ -232,6 +255,7 @@ def generate_demo_data(n_alumnos: int = 120, seed: int = 42) -> tuple:
             evaluacion = ""
             if estado == "Aceptado":
                 evaluacion = str(round(float(np.clip(np.random.normal(5.5, 0.8), 1, 7)), 1))
+            prof = prof_por_curso.get((mat, cur), {"nombre": "DOCENTE/DEMO", "email": "demo@miuandes.cl"})
             post_rows.append({
                 "RUT":              rut,
                 "Nombre":           "Alumno Demo",
@@ -242,7 +266,8 @@ def generate_demo_data(n_alumnos: int = 120, seed: int = 42) -> tuple:
                 "Curso":            cur,
                 "Sección":          np.random.randint(1, 4),
                 "Asignatura":       tit,
-                "Profesor":         "APELLIDO/NOMBRE",
+                "Profesor":         prof["nombre"],
+                "Email Profesor":   prof["email"],
                 "Motivación":       str(np.random.randint(1, 5)),
                 "Tipo de ayudante": np.random.choice(["Docente", "Corrección", "Laboratorio"]),
                 "Estado":           estado,
@@ -253,30 +278,39 @@ def generate_demo_data(n_alumnos: int = 120, seed: int = 42) -> tuple:
                 "Fecha Modificación": f"15/03/{periodo[:4]}",
             })
 
-    # También agregar postulantes del periodo actual (202610) sin evaluación aún
+    # También agregar postulantes del periodo actual (202610) con estados variados
     ruts_postulantes = np.random.choice(ruts, size=int(n_alumnos * 0.40), replace=False)
+    estados_actuales = ["Pendiente", "Pendiente", "Aceptado", "Rechazado", "Pendiente"]
     for rut in ruts_postulantes:
-        mat, cur, tit = cursos_base[np.random.randint(0, len(cursos_base))]
-        post_rows.append({
-            "RUT":              rut,
-            "Nombre":           "Alumno Demo",
-            "Correo":           f"{rut}@miuandes.cl",
-            "Periodo":          "202610",
-            "NRC":              np.random.randint(5000, 5030),
-            "Materia":          mat,
-            "Curso":            cur,
-            "Sección":          1,
-            "Asignatura":       tit,
-            "Profesor":         "APELLIDO/NOMBRE",
-            "Motivación":       str(np.random.randint(1, 5)),
-            "Tipo de ayudante": np.random.choice(["Docente", "Corrección"]),
-            "Estado":           "Pendiente",
-            "Aceptado por":     "",
-            "Firma":            "",
-            "Asistencia taller": "",
-            "Evaluación":       "",
-            "Fecha Modificación": "01/04/2026",
-        })
+        # Cada postulante puede tener 1 o 2 postulaciones en el periodo actual
+        n_posts = np.random.choice([1, 1, 1, 2], p=[0.6, 0.15, 0.15, 0.10])
+        cursos_post = np.random.choice(len(cursos_base), n_posts, replace=False)
+        for ci in cursos_post:
+            mat, cur, tit = cursos_base[ci]
+            estado_actual = np.random.choice(estados_actuales)
+            prof = prof_por_curso.get((mat, cur), {"nombre": "DOCENTE/DEMO", "email": "demo@miuandes.cl"})
+            tipo_ay = np.random.choice(["Docente", "Corrección", "Laboratorio"])
+            post_rows.append({
+                "RUT":              rut,
+                "Nombre":           "Alumno Demo",
+                "Correo":           f"{rut}@miuandes.cl",
+                "Periodo":          "202610",
+                "NRC":              np.random.randint(5000, 5030),
+                "Materia":          mat,
+                "Curso":            cur,
+                "Sección":          1,
+                "Asignatura":       tit,
+                "Profesor":         prof["nombre"],
+                "Email Profesor":   prof["email"],
+                "Motivación":       str(np.random.randint(1, 5)),
+                "Tipo de ayudante": tipo_ay,
+                "Estado":           estado_actual,
+                "Aceptado por":     "Coordinador" if estado_actual == "Aceptado" else "",
+                "Firma":            "Si" if estado_actual == "Aceptado" else "",
+                "Asistencia taller": "",
+                "Evaluación":       "",
+                "Fecha Modificación": "01/04/2026",
+            })
 
     postulaciones_df = pd.DataFrame(post_rows)
 

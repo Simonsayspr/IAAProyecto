@@ -34,10 +34,10 @@ _KNOWN_HEADERS = {
 
 
 def _extract_file_id(url: str) -> str:
-    m = re.search(r"/(?:spreadsheets|file)/d/([a-zA-Z0-9_-]+)", url)
-    if not m:
+    match = re.search(r"/(?:spreadsheets|file)/d/([a-zA-Z0-9_-]+)", url)
+    if not match:
         raise ValueError(f"No se pudo extraer el file ID de: {url}")
-    return m.group(1)
+    return match.group(1)
 
 
 def _smart_dataframe(rows: list) -> pd.DataFrame:

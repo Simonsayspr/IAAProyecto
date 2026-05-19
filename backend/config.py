@@ -11,6 +11,7 @@ Variables de entorno requeridas (en .env o en el entorno del contenedor):
   SPREADSHEET_URL_NRC          URL hoja Listado de NRC por Periodo
   SPREADSHEET_URL_INSCRITOS    URL hoja Ramos Inscritos por Periodo
   SPREADSHEET_URL_POSTULACIONES URL hoja Postulaciones (opcional)
+  SPREADSHEET_URL_PLAN_ESTUDIOS URL hoja Plan de Estudios / Malla Nueva
 
   NOTA_MINIMA_AYUDANTE         Nota minima para ser candidato (default: 5.0)
   MAX_AYUDANTIAS_ALUMNO        Maximo de cursos como ayudante (default: 2)
@@ -65,6 +66,7 @@ def build_config() -> dict:
         "spreadsheet_url_nrc":          raw.get("SPREADSHEET_URL_NRC", ""),
         "spreadsheet_url_inscritos":    raw.get("SPREADSHEET_URL_INSCRITOS", ""),
         "spreadsheet_url_postulaciones":raw.get("SPREADSHEET_URL_POSTULACIONES", ""),
+        "spreadsheet_url_plan_estudios":raw.get("SPREADSHEET_URL_PLAN_ESTUDIOS", ""),
         # Parametros del pipeline
         "nota_minima_ayudante": float(raw.get("NOTA_MINIMA_AYUDANTE", 5.0)),
         "max_ayudantias_alumno": int(raw.get("MAX_AYUDANTIAS_ALUMNO", 2)),
