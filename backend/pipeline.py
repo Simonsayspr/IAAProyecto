@@ -89,7 +89,15 @@ class DataProcessor:
         df = df.copy()
         df.columns = [re.sub(r"\s+", " ", str(c).strip().upper()) for c in df.columns]
         if "RUT" in df.columns:
-            df["RUT"] = df["RUT"].astype(str).str.strip()
+            # Elimina el '.0' si Pandas lo casteó a float, y quita puntos y guiones
+            df["RUT"] = (
+                df["RUT"]
+                .astype(str)
+                .str.upper()
+                .str.replace(r"\.0$", "", regex=True)
+                .str.replace(r"[^0-9K]", "", regex=True)
+                .str.strip()
+            )
         return df
 
     def _to_float(self, series: pd.Series) -> pd.Series:
@@ -445,15 +453,25 @@ class DataProcessor:
             if col in df.columns:
                 df[col] = self._to_float(df[col])
 
-        df["PERIODO"] = df["PERIODO"].astype(str).str.strip()
-        df["ESTADO_NORM"] = df.get("ESTADO", pd.Series(dtype=str)).astype(str).str.strip().str.upper()
+        # Limpiar PERIODO de posibles '.0' al ser leídos como float
+        df["PERIODO"] = df["PERIODO"].astype(str).str.replace(r"\.0$", "", regex=True).str.strip()
+        
+        # Limpiar y normalizar ESTADO
+        estado_s = df.get("ESTADO", pd.Series(dtype=str)).astype(str).str.strip().str.upper()
+        # Eliminar tildes comunes que puedan causar missmatch
+        for char, repl in zip("ÁÉÍÓÚ", "AEIOU"):
+            estado_s = estado_s.str.replace(char, repl, regex=False)
+        df["ESTADO_NORM"] = estado_s
+        
         df["FUE_ACEPTADO"] = df["ESTADO_NORM"].isin(self.ESTADOS_ACEPTADO)
 
         # Separar histórico (periodos anteriores al actual) de actuales
         historico = df.copy()
         actuales = pd.DataFrame()
         if periodo_actual:
-            historico = df[df["PERIODO"] < str(periodo_actual)]
+            # Consideramos histórico todo periodo anterior, O CUALQUIER postulación que ya esté ACEPTADA
+            # (esto resuelve el problema cuando la base de datos solo tiene el periodo actual)
+            historico = df[(df["PERIODO"] < str(periodo_actual)) | df["FUE_ACEPTADO"]]
             actuales  = df[df["PERIODO"] == str(periodo_actual)]
 
         # Agregar por alumno sobre el histórico aceptado
