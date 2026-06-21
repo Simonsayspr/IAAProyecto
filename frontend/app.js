@@ -1,5 +1,7 @@
 /* ── Estado global ─────────────────────────────────────────────────────────── */
 const state = {
+  userRole:      "admin",        // "admin" | "profesor"
+  selectedProfesor: "",          // Nombre del profesor seleccionado
   allCandidates: [],
   filtered:      [],
   students:      [],     // lista rápida de alumnos (students_ready)
@@ -31,6 +33,8 @@ const API = window.location.port && window.location.port !== "80"
 /* ── DOM refs ──────────────────────────────────────────────────────────────── */
 const $ = id => document.getElementById(id);
 const dom = {
+  userRole:        $("userRole"),
+  profesorSelect:  $("profesorSelect"),
   statusBadge:     $("statusBadge"),
   statusText:      $("statusText"),
   loadingPanel:    $("loadingPanel"),
@@ -362,6 +366,7 @@ function ingestCandidates(data) {
   state.studentInfo   = data.student_info || {};
   state.taTypeCounts  = data.ta_type_counts || {};
   state.profesorMap   = data.profesor_map || {};
+  updateProfesorDropdown();
 
   // Enrich candidates with names from studentsMap
   if (Object.keys(state.studentsMap).length) {
@@ -438,8 +443,21 @@ function buildSchoolAndCoursePicker(cursos) {
 }
 
 function filteredCursos() {
+  let base = state.cursosList;
+  if (state.userRole === "profesor" && state.selectedProfesor) {
+    const profCourseKeys = new Set();
+    state.allCandidates.forEach(c => {
+      const pData = state.profesorMap[c.NRC];
+      const pName = pData ? pData.nombre : c.PROFESOR_POST;
+      if (pName === state.selectedProfesor) {
+        profCourseKeys.add(`${c.MATERIA}-${c.CURSO}`);
+      }
+    });
+    base = base.filter(c => profCourseKeys.has(c.key));
+  }
+  
   const esc = state.filters.escuela;
-  return esc ? state.cursosList.filter(c => c.prefix === esc) : state.cursosList;
+  return esc ? base.filter(c => c.prefix === esc) : base;
 }
 
 /* ── Course picker logic ───────────────────────────────────────────────────── */
@@ -964,6 +982,13 @@ function renderCandidateTable() {
   }
 
   dom.candidatesBody.innerHTML = slice.map((c, i) => {
+    let isMyCourse = true;
+    if (state.userRole === "profesor" && state.selectedProfesor) {
+      const pData = state.profesorMap[c.NRC];
+      const pName = pData ? pData.nombre : c.PROFESOR_POST;
+      if (pName !== state.selectedProfesor) isMyCourse = false;
+    }
+
     const n        = start + i + 1;
     const expTimes = c.N_VECES_AYUDANTE ?? 0;
     const expHtml  = expTimes > 0
@@ -971,7 +996,7 @@ function renderCandidateTable() {
       : `<span class="tag-exp tag-exp-no">No</span>`;
     const curso    = `${c.MATERIA ?? ""} ${c.CURSO ?? ""} ${c.SECC != null ? `(S${c.SECC})` : ""}`.trim();
     const nombre   = c.NOMBRE_COMPLETO || "";
-    const justifyLine = state.aiMode ? aiJustification(c) : scoreJustification(c);
+    const justifyLine = isMyCourse ? (state.aiMode ? aiJustification(c) : scoreJustification(c)) : "Métricas reservadas";
     const nAceptadas = c.N_ACEPTADAS_ACTUAL ?? 0;
     const maxWarning = nAceptadas >= 3 ? `<span class="tag-max-ta">Máx. 3 TA</span>` : "";
     const estadoPost = c.ESTADO_POSTULACION || "";
@@ -990,11 +1015,11 @@ function renderCandidateTable() {
         <div style="font-size:0.76rem;color:var(--ink-faint)">${c.TITULO ?? ""}</div>
         ${estadoBadge}
       </td>
-      <td style="font-weight:700">${fmt(c.NOTA_RAMO, 1)}</td>
+      <td style="font-weight:700">${isMyCourse ? fmt(c.NOTA_RAMO, 1) : '<span style="font-size:0.8rem;color:var(--ink-faint)">Confidencial</span>'}</td>
       <td>${fmt(c.PGA, 2)}</td>
       <td>${expHtml}</td>
       <td>
-        ${aptitudeTag(c)}
+        ${isMyCourse ? aptitudeTag(c) : '<span style="color:var(--ink-faint);font-size:0.85rem">Confidencial</span>'}
         <div class="score-justify">${justifyLine}</div>
       </td>
       <td><button class="btn-profile" data-idx="${start + i}">Ver perfil</button></td>
@@ -1027,10 +1052,17 @@ function openModal(candidate, rut) {
   const cursoLabel = candidate.ES_CURSO_NUEVO
     ? `${candidate.MATERIA??""} ${candidate.CURSO??""} — ${candidate.TITULO??""} (curso nuevo)`
     : `${candidate.MATERIA??""} ${candidate.CURSO??""} — ${candidate.TITULO??""}`;
+  let isMyCourse = true;
+  if (state.userRole === "profesor" && state.selectedProfesor) {
+    const pData = state.profesorMap[candidate.NRC];
+    const pName = pData ? pData.nombre : candidate.PROFESOR_POST;
+    if (pName !== state.selectedProfesor) isMyCourse = false;
+  }
+
   $("mCurso").textContent      = cursoLabel;
-  $("mNota").textContent       = candidate.ES_CURSO_NUEVO
-    ? `${fmt(candidate.NOTA_RAMO,1)} (inferida)`
-    : fmt(candidate.NOTA_RAMO,1);
+  $("mNota").innerHTML         = isMyCourse
+    ? (candidate.ES_CURSO_NUEVO ? `${fmt(candidate.NOTA_RAMO,1)} (inferida)` : fmt(candidate.NOTA_RAMO,1))
+    : '<span style="font-size:0.85rem;color:var(--ink-faint)">Confidencial</span>';
   $("mPGA").textContent        = fmt(candidate.PGA,2);
   $("mAvance").textContent     = candidate.AVANCE_MALLA != null ? `${(candidate.AVANCE_MALLA*100).toFixed(0)}%` : "—";
   $("mCarga").textContent      = candidate.CARGA_ACTUAL != null ? `${candidate.CARGA_ACTUAL} ramo(s)` : "—";
@@ -1117,17 +1149,26 @@ function openModal(candidate, rut) {
       recEl.innerHTML = `<p class="ta-empty">Sin datos de recomendación.</p>`;
     } else {
       recEl.innerHTML = allForRUT.slice(0, 6).map((c, i) => {
+        let isMyC = true;
+        if (state.userRole === "profesor" && state.selectedProfesor) {
+          const pD = state.profesorMap[c.NRC];
+          const pN = pD ? pD.nombre : c.PROFESOR_POST;
+          if (pN !== state.selectedProfesor) isMyC = false;
+        }
+
         const pct = Math.round((c.SCORE ?? 0) * 100);
-        const asigBadge = state.aiMode && c.ASIGNADO === 1
+        const asigBadge = state.aiMode && c.ASIGNADO === 1 && isMyC
           ? `<span class="tag-aptitud tag-seleccionado" style="font-size:0.72rem">✓ Asignado</span>` : "";
-        const justLine = state.aiMode ? aiJustification(c) : scoreJustification(c);
+        const justLine = isMyC ? (state.aiMode ? aiJustification(c) : scoreJustification(c)) : "Métricas reservadas.";
+        const evalTxt = isMyC ? (state.aiMode ? pct + "%" : "Score: " + fmt(c.SCORE,3)) : `<span style="font-size:0.8rem;color:var(--ink-faint)">Confidencial</span>`;
+        
         return `<div class="ta-item">
           <span class="ta-periodo" style="min-width:36px;text-align:center">${i===0?"★":"#"+(i+1)}</span>
           <span class="ta-curso" style="flex:1">
             <strong>${c.MATERIA??""} ${c.CURSO??""}</strong> — ${c.TITULO??""} &nbsp;${asigBadge}
             <div style="font-size:0.74rem;color:var(--ink-faint);margin-top:2px">${justLine}</div>
           </span>
-          <span class="ta-eval">${state.aiMode ? pct + "%" : "Score: " + fmt(c.SCORE,3)}</span>
+          <span class="ta-eval">${evalTxt}</span>
         </div>`;
       }).join("");
     }
@@ -1347,6 +1388,54 @@ function wireEvents() {
   dom.modalClose.addEventListener("click", closeModal);
   dom.modalOverlay.addEventListener("click", e => { if(e.target===dom.modalOverlay)closeModal(); });
   document.addEventListener("keydown", e => { if(e.key==="Escape")closeModal(); });
+
+  if (dom.userRole) {
+    dom.userRole.addEventListener("change", (e) => {
+      state.userRole = e.target.value;
+      if (state.userRole === "profesor") {
+        dom.profesorSelect.style.display = "";
+        state.selectedProfesor = dom.profesorSelect.value;
+      } else {
+        dom.profesorSelect.style.display = "none";
+        state.selectedProfesor = "";
+      }
+      
+      const validCursos = filteredCursos().map(c => c.key);
+      if (state.filters.curso && !validCursos.includes(state.filters.curso)) {
+        state.filters.curso = "";
+        const inp=$("fCursoInput"),clr=$("cursoClear");
+        if(inp){inp.value="";clr.style.display="none";}
+      }
+      applyFilters(); 
+    });
+  }
+
+  if (dom.profesorSelect) {
+    dom.profesorSelect.addEventListener("change", (e) => {
+      state.selectedProfesor = e.target.value;
+      
+      const validCursos = filteredCursos().map(c => c.key);
+      if (state.filters.curso && !validCursos.includes(state.filters.curso)) {
+        state.filters.curso = "";
+        const inp=$("fCursoInput"),clr=$("cursoClear");
+        if(inp){inp.value="";clr.style.display="none";}
+      }
+      applyFilters(); 
+    });
+  }
+}
+
+function updateProfesorDropdown() {
+  if (!dom.profesorSelect) return;
+  const profNames = new Set();
+  Object.values(state.profesorMap).forEach(p => {
+    if (p.nombre) profNames.add(p.nombre);
+  });
+  const sortedNames = Array.from(profNames).sort();
+  dom.profesorSelect.innerHTML = sortedNames.map(name => `<option value="${name}">${name}</option>`).join("");
+  if (sortedNames.length > 0 && state.userRole === "profesor") {
+    state.selectedProfesor = dom.profesorSelect.value;
+  }
 }
 
 /* ── Init ──────────────────────────────────────────────────────────────────── */

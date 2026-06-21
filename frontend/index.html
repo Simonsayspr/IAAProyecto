@@ -27,6 +27,17 @@
     </div>
     <div class="topbar-spacer"></div>
     <div class="topbar-controls">
+      <!-- Selector de Perfil (Login Simulado) -->
+      <div style="display: flex; gap: 8px; align-items: center; margin-right: 12px;">
+        <select id="userRole" style="padding: 6px; border-radius: 4px; border: 1px solid var(--border); font-size: 0.85rem; background: var(--surface);">
+          <option value="admin">Perfil: Administrador</option>
+          <option value="profesor">Perfil: Profesor</option>
+        </select>
+        <select id="profesorSelect" style="display: none; padding: 6px; border-radius: 4px; border: 1px solid var(--border); font-size: 0.85rem; background: var(--surface); max-width: 200px;">
+          <!-- Se llenará dinámicamente -->
+        </select>
+      </div>
+
       <div class="mode-toggle">
         <button id="btnDemo"   class="active">Demo</button>
         <button id="btnSheets">Google Sheets</button>
