@@ -940,10 +940,15 @@ function renderStudentTable() {
       ? `<span class="tag-exp tag-exp-si">Sí (${expTimes}×)</span>`
       : `<span class="tag-exp tag-exp-no">No</span>`;
     const nombre   = s.NOMBRE_COMPLETO || "—";
+    const info     = state.studentInfo ? state.studentInfo[s.RUT] || {} : {};
+    const email    = info.email || `${s.RUT}@miuandes.cl`;
     return `<tr>
       <td style="color:var(--ink-faint);font-size:0.80rem">${n}</td>
       <td style="font-family:'Space Grotesk',sans-serif;font-weight:600">${s.RUT ?? ""}</td>
-      <td style="font-size:0.87rem">${nombre}</td>
+      <td style="font-size:0.87rem">
+        <div>${nombre}</div>
+        <div style="font-size:0.75rem;color:var(--accent-primary);margin-top:2px"><a href="mailto:${email}" style="color:inherit;text-decoration:none">${email}</a></div>
+      </td>
       <td style="font-weight:700">${fmt(s.PGA, 2)}</td>
       <td>${expHtml}</td>
       <td><button class="btn-profile btn-profile-student" data-rut="${s.RUT}">Ver perfil</button></td>
@@ -996,6 +1001,8 @@ function renderCandidateTable() {
       : `<span class="tag-exp tag-exp-no">No</span>`;
     const curso    = `${c.MATERIA ?? ""} ${c.CURSO ?? ""} ${c.SECC != null ? `(S${c.SECC})` : ""}`.trim();
     const nombre   = c.NOMBRE_COMPLETO || "";
+    const info     = state.studentInfo ? state.studentInfo[c.RUT] || {} : {};
+    const email    = info.email || `${c.RUT}@miuandes.cl`;
     const justifyLine = isMyCourse ? (state.aiMode ? aiJustification(c) : scoreJustification(c)) : "Métricas reservadas";
     const nAceptadas = c.N_ACEPTADAS_ACTUAL ?? 0;
     const maxWarning = nAceptadas >= 3 ? `<span class="tag-max-ta">Máx. 3 TA</span>` : "";
@@ -1008,6 +1015,7 @@ function renderCandidateTable() {
       <td>
         <div style="font-family:'Space Grotesk',sans-serif;font-weight:600">${c.RUT ?? ""}</div>
         ${nombre ? `<div style="font-size:0.76rem;color:var(--ink-faint)">${nombre}</div>` : ""}
+        <div style="font-size:0.72rem;color:var(--accent-primary);margin-top:2px"><a href="mailto:${email}" style="color:inherit;text-decoration:none">${email}</a></div>
         ${maxWarning}
       </td>
       <td>
