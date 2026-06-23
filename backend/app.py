@@ -158,7 +158,9 @@ def _compute_student_info(
         idf = inscritos_df.copy()
         idf.columns = [re.sub(r"\s+", " ", str(c).strip().upper()) for c in idf.columns]
         for _, row in idf.iterrows():
-            rut = str(row.get("RUT", "")).strip()
+            rut_raw = str(row.get("RUT", "")).strip().upper()
+            if rut_raw.endswith(".0"): rut_raw = rut_raw[:-2]
+            rut = re.sub(r"[^0-9K]", "", rut_raw)
             nrc_key = str(row.get("NRC", "")).strip()
             if not rut or not nrc_key:
                 continue
@@ -175,10 +177,13 @@ def _compute_student_info(
     ACEPTADO = {"aceptado", "aprobado", "activo", "seleccionado"}
     if postulaciones_df is not None and not postulaciones_df.empty:
         pdf = postulaciones_df.copy()
-        pdf.columns = [str(c).strip() for c in pdf.columns]
+        pdf.columns = [str(c).strip().upper() for c in pdf.columns]
+        matched_experiencia = 0
         for _, row in pdf.iterrows():
-            rut = str(row.get("RUT", "")).strip()
-            estado = str(row.get("Estado", "")).strip()
+            rut_raw = str(row.get("RUT", "")).strip().upper()
+            if rut_raw.endswith(".0"): rut_raw = rut_raw[:-2]
+            rut = re.sub(r"[^0-9K]", "", rut_raw)
+            estado = str(row.get("ESTADO", "")).strip()
             estado_lower = estado.lower()
             if not rut:
                 continue
@@ -191,32 +196,33 @@ def _compute_student_info(
                 }
             if "postulaciones_actuales" not in student_info[rut]:
                 student_info[rut]["postulaciones_actuales"] = []
-            correo = str(row.get("Correo", "")).strip()
+            correo = str(row.get("CORREO", "")).strip()
             if "@" in correo:
                 student_info[rut]["email"] = correo
 
-            profesor = str(row.get("Profesor", "")).strip()
-            tipo_ay = str(row.get("Tipo de ayudante", "")).strip()
+            profesor = str(row.get("PROFESOR", "")).strip()
+            tipo_ay = str(row.get("TIPO DE AYUDANTE", "")).strip()
 
             if estado_lower in ACEPTADO:
-                eval_raw = str(row.get("Evaluación", row.get("Evaluacion", ""))).strip()
+                matched_experiencia += 1
+                eval_raw = str(row.get("EVALUACIÓN", row.get("EVALUACION", ""))).strip()
                 student_info[rut]["ayudantias_previas"].append({
-                    "periodo":    str(row.get("Periodo", "")),
-                    "materia":    str(row.get("Materia", "")),
-                    "curso":      str(row.get("Curso", "")),
-                    "asignatura": str(row.get("Asignatura", "")),
+                    "periodo":    str(row.get("PERIODO", "")),
+                    "materia":    str(row.get("MATERIA", "")),
+                    "curso":      str(row.get("CURSO", "")),
+                    "asignatura": str(row.get("ASIGNATURA", "")),
                     "evaluacion": eval_raw if eval_raw not in ("", "nan", "None") else None,
                     "tipo":       tipo_ay,
                     "profesor":   profesor,
                 })
 
             # Postulaciones del periodo actual
-            periodo = str(row.get("Periodo", "")).strip()
+            periodo = str(row.get("PERIODO", "")).strip()
             student_info[rut]["postulaciones_actuales"].append({
                 "periodo":    periodo,
-                "materia":    str(row.get("Materia", "")),
-                "curso":      str(row.get("Curso", "")),
-                "asignatura": str(row.get("Asignatura", "")),
+                "materia":    str(row.get("MATERIA", "")),
+                "curso":      str(row.get("CURSO", "")),
+                "asignatura": str(row.get("ASIGNATURA", "")),
                 "estado":     estado,
                 "tipo":       tipo_ay,
                 "profesor":   profesor,
