@@ -598,7 +598,7 @@ function toggleKpis() {
 /* ── KPIs ──────────────────────────────────────────────────────────────────── */
 function renderKPIs(kpi1, kpi2, kpi3) {
   renderOneKPI("kpi1", kpi1, 0, 1, v => v?.toFixed(4));
-  renderOneKPI("kpi2", kpi2, 0, 7, v => v?.toFixed(2) + " / 7.0");
+  renderOneKPI("kpi2", kpi2, 0, 1, v => (v*100)?.toFixed(1) + "%");
   renderOneKPI("kpi3", kpi3, 0, 1, v => (v*100)?.toFixed(1) + "%");
 }
 

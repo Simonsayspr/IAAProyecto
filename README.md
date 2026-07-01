@@ -240,7 +240,7 @@ Asignación óptima (maximiza score total)
     │
     ▼
 KPI 1: F1-Score del modelo (baseline 0.55, meta 0.80)
-KPI 2: Calidad promedio de evaluaciones (meta ≥ 5.0 / 7.0)
+KPI 2: Tasa de Renovación de la Academia (TRA) (meta 25% - 45%)
 KPI 3: Tasa de cobertura de restricciones (meta ≥ 0.90)
 ```
 
