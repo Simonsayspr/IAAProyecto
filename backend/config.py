@@ -15,6 +15,8 @@ Variables de entorno requeridas (en .env o en el entorno del contenedor):
 
   NOTA_MINIMA_AYUDANTE         Nota minima para ser candidato (default: 5.0)
   MAX_AYUDANTIAS_ALUMNO        Maximo de cursos como ayudante (default: 2)
+
+  APP_ROLE                     Rol de la instancia: 'admin' o 'profesor' (default: admin)
 """
 
 import json
@@ -49,14 +51,27 @@ def _load_service_account(raw: dict) -> dict:
         with open(sa_file, encoding="utf-8") as f:
             return json.load(f)
 
-    # Sin credenciales — devuelve dict vacio (demo sin Google Sheets)
+    # Sin credenciales configuradas — devuelve dict vacio
     return {}
+
+
+def _load_app_role(raw: dict) -> str:
+    """
+    Rol con el que se levanta la app: 'admin' (facultad) o 'profesor'.
+
+    El APP_ROLE del entorno tiene prioridad sobre el .env, para poder forzar el
+    rol al levantar (ej. `APP_ROLE=profesor python -m uvicorn ...`) sin editar .env.
+    """
+    role = (os.environ.get("APP_ROLE") or raw.get("APP_ROLE", "admin")).strip().lower()
+    return role if role in ("admin", "profesor") else "admin"
 
 
 def build_config() -> dict:
     raw = _load_raw()
     return {
         "service_account": _load_service_account(raw),
+        # Rol de la instancia: 'admin' ve todo; 'profesor' oculta datos sensibles
+        "app_role": _load_app_role(raw),
         "url_scope": raw.get(
             "GOOGLE_SCOPE", "https://spreadsheets.google.com/feeds"
         ),

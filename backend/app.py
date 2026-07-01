@@ -25,14 +25,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from backend.config import global_vars
 from backend.pipeline import (
-    run_pipeline,
     run_pipeline_deterministic,
     run_pipeline_ai,
     KPI_METADATA,
     WEIGHT_PRESETS,
-    AIExplanationGenerator,
     CurriculumCatalogProcessor,
-    generate_synthetic_name,
+    EligibleCandidateBuilder,
 )
 from backend.skills.google_auth import GoogleAuth
 from backend.skills.google_spreadsheet import GoogleSpreadsheetSkill
@@ -117,6 +115,26 @@ def _read_sheets() -> dict[str, pd.DataFrame]:
 
 def _df_to_records(df: pd.DataFrame) -> list:
     return df.replace({np.nan: None}).to_dict(orient="records")
+
+
+def _latest_application_period(postulaciones_df: Optional[pd.DataFrame]) -> Optional[str]:
+    """
+    Período de postulación más reciente desde la hoja de Postulaciones.
+
+    Busca la columna 'Periodo' sin importar mayúsculas/acentos. Representa el
+    período en que el alumno postuló (no el semestre vigente).
+    """
+    if postulaciones_df is None or postulaciones_df.empty:
+        return None
+    period_column = next(
+        (c for c in postulaciones_df.columns
+         if str(c).strip().upper().replace("Í", "I") == "PERIODO"),
+        None,
+    )
+    if not period_column:
+        return None
+    periods = postulaciones_df[period_column].dropna().astype(str).unique()
+    return sorted(periods)[-1] if len(periods) else None
 
 
 def _compute_student_info(
@@ -236,7 +254,6 @@ def _compute_student_info(
 class PipelineRequest(BaseModel):
     nota_minima: float = 5.0
     max_ayudantias: int = 2
-    usar_demo: bool = False
     weight_preset: Optional[str] = None
     custom_weights: Optional[dict] = None
 
@@ -273,6 +290,12 @@ def health():
     )
 
 
+@app.get("/config", tags=["Estado"])
+def app_config():
+    """Configuración pública para el frontend (rol de la instancia)."""
+    return {"app_role": global_vars.get("app_role", "admin")}
+
+
 @app.get("/sheets/check", tags=["Google Sheets"])
 def check_sheets():
     try:
@@ -297,33 +320,23 @@ def run(req: PipelineRequest):
     """
     def generate():
         try:
-            from backend.pipeline import DataProcessor
-            processor = DataProcessor(nota_minima=req.nota_minima)
+            student_builder = EligibleCandidateBuilder(minimum_grade=req.nota_minima)
 
             # ── Fase 1: datos de estudiantes (rápido) ─────────────────────
             yield _sse({"type": "progress", "step": 1, "msg": "Cargando datos de estudiantes…"})
 
-            if req.usar_demo:
-                from run_demo import generate_demo_data
-                malla, promedios, inscritos, nrc, postulaciones = generate_demo_data()
-                periodo_actual = "202610"
-            else:
-                creds = _get_credentials()
-                promedios     = _read_one_sheet(creds, "spreadsheet_url_promedios", "UG305 - Reporte Alumnos con Pro")
-                postulaciones = _read_one_sheet_optional(creds, "spreadsheet_url_postulaciones", "Registros")
+            creds = _get_credentials()
+            promedios     = _read_one_sheet(creds, "spreadsheet_url_promedios", "UG305 - Reporte Alumnos con Pro")
+            postulaciones = _read_one_sheet_optional(creds, "spreadsheet_url_postulaciones", "Registros")
 
             post_df = postulaciones if not postulaciones.empty else None
 
-            # En demo conocemos el periodo; en Sheets lo inferimos de postulaciones
-            if not req.usar_demo:
-                periodo_actual = None
-                if post_df is not None and "Periodo" in post_df.columns:
-                    periodos = post_df["Periodo"].dropna().astype(str).unique()
-                    if len(periodos):
-                        periodo_actual = sorted(periodos)[-1]
+            # Período de postulación más reciente (aproximación para la lista
+            # inicial de alumnos; el período definitivo se toma de NRC en la fase 2)
+            periodo_actual = _latest_application_period(post_df)
 
             # Emitir lista de estudiantes inmediatamente (sin esperar el cruce)
-            students_df = processor.get_students_fast(promedios, post_df, periodo_actual)
+            students_df = student_builder.get_students_summary(promedios, post_df, periodo_actual)
             yield _sse({
                 "type":     "students_ready",
                 "students": _df_to_records(students_df),
@@ -333,26 +346,24 @@ def run(req: PipelineRequest):
             # ── Fase 2: cargar planillas restantes (más lentas) ────────────
             yield _sse({"type": "progress", "step": 2, "msg": "Cargando malla y ramos del período…"})
 
-            if not req.usar_demo:
-                malla     = _read_one_sheet(creds, "spreadsheet_url_malla",     "RA311 - Cumplimiento de Malla P")
-                nrc       = _read_one_sheet(creds, "spreadsheet_url_nrc",       "UG201 - Listado de NRC por Peri")
-                inscritos = _read_one_sheet(creds, "spreadsheet_url_inscritos", "UG307 - Ramos Inscritos por Per")
-                periodo_actual = None
-                if "PERIODO" in nrc.columns and not nrc.empty:
-                    periodo_actual = str(nrc["PERIODO"].dropna().astype(str).mode().iloc[0])
+            malla     = _read_one_sheet(creds, "spreadsheet_url_malla",     "RA311 - Cumplimiento de Malla P")
+            nrc       = _read_one_sheet(creds, "spreadsheet_url_nrc",       "UG201 - Listado de NRC por Peri")
+            inscritos = _read_one_sheet(creds, "spreadsheet_url_inscritos", "UG307 - Ramos Inscritos por Per")
+            # Período actual = semestre vigente según NRC (cursos impartidos ahora)
+            if "PERIODO" in nrc.columns and not nrc.empty:
+                periodo_actual = str(nrc["PERIODO"].dropna().astype(str).mode().iloc[0])
 
             # ── Cargar catálogo de plan de estudios (opcional) ─────────────
             catalog_df = None
             prerequisites_map = None
             try:
-                if not req.usar_demo:
-                    cat_raw = _read_one_sheet_optional(creds, "spreadsheet_url_plan_estudios", "Periodo")
-                    if not cat_raw.empty:
-                        cat_proc = CurriculumCatalogProcessor()
-                        catalog_df = cat_proc.load_course_catalog(cat_raw)
-                        prereq_raw = _read_one_sheet_optional(creds, "spreadsheet_url_plan_estudios", "Nueva Malla - Requisitos")
-                        if not prereq_raw.empty:
-                            prerequisites_map = cat_proc.load_prerequisites(prereq_raw)
+                cat_raw = _read_one_sheet_optional(creds, "spreadsheet_url_plan_estudios", "Periodo")
+                if not cat_raw.empty:
+                    catalog_processor = CurriculumCatalogProcessor()
+                    catalog_df = catalog_processor.load_course_catalog(cat_raw)
+                    prereq_raw = _read_one_sheet_optional(creds, "spreadsheet_url_plan_estudios", "Nueva Malla - Requisitos")
+                    if not prereq_raw.empty:
+                        prerequisites_map = catalog_processor.load_prerequisites(prereq_raw)
             except Exception as e:
                 print(f"  [Info] Catálogo de plan de estudios no disponible: {e}")
 
@@ -458,7 +469,7 @@ def score_pipeline(req: ScoreRequest):
 
     def generate():
         try:
-            yield _sse({"type": "progress", "step": 2, "msg": "Ejecutando modelo de IA (Random Forest)…"})
+            yield _sse({"type": "progress", "step": 2, "msg": "Ejecutando modelo de IA (XGBoost)…"})
 
             candidates_df = pd.DataFrame(req.candidates)
             # Restaurar tipos numéricos que JSON convierte a object
