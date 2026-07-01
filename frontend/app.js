@@ -11,7 +11,6 @@ const state = {
   cursosList:    [],
   taTypeCounts:  {},     // {Docente: N, Corrección: N, ...}
   profesorMap:   {},     // {NRC: {nombre, rut}}
-  useDemoMode:   true,
   loading:       false,
   aiMode:        false,
   viewMode:      "students",   // "students" | "candidates"
@@ -30,10 +29,33 @@ const API = window.location.port && window.location.port !== "80"
   ? "http://localhost:8000"
   : "/api";
 
+/* ── Rol (admin | profesor) ──────────────────────────────────────────────────
+   El rol lo fija APP_ROLE en el build y lo entrega el backend en /config.
+   En modo profesor se ocultan el RUT y las notas de ramos no filtrados. */
+function isProfesor() { return state.userRole === "profesor"; }
+
+function maskRut(rut) {
+  return isProfesor() ? "—" : (rut ?? "");
+}
+
+function maskEmail(email, rut) {
+  // El correo institucional por defecto es <rut>@dominio: ocultarlo revela el RUT.
+  if (!isProfesor() || !email) return email;
+  const [local, domain] = String(email).split("@");
+  if (domain && local === String(rut)) return `•••@${domain}`;
+  return email;
+}
+
+// El profesor solo ve la nota cuando filtró por ese mismo ramo.
+function gradeVisible(c) {
+  if (!isProfesor()) return true;
+  return !!state.filters.curso && `${c.MATERIA}-${c.CURSO}` === state.filters.curso;
+}
+
 /* ── DOM refs ──────────────────────────────────────────────────────────────── */
 const $ = id => document.getElementById(id);
 const dom = {
-  userRole:        $("userRole"),
+  roleBadge:       $("roleBadge"),
   profesorSelect:  $("profesorSelect"),
   statusBadge:     $("statusBadge"),
   statusText:      $("statusText"),
@@ -43,8 +65,6 @@ const dom = {
   btnAI:           $("btnAI"),
   btnExport:       $("btnExport"),
   btnKpis:         $("btnKpis"),
-  btnDemo:         $("btnDemo"),
-  btnSheets:       $("btnSheets"),
   btnClear:        $("btnClear"),
   fEscuela:        $("fEscuela"),
   fExAyudante:     $("fExAyudante"),
@@ -218,7 +238,6 @@ async function runPipeline() {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        usar_demo:      state.useDemoMode,
         nota_minima:    parseFloat(dom.fNotaMinima.value),
         max_ayudantias: 2,
         weight_preset:  document.getElementById("fWeightPreset")?.value || "balanced",
@@ -730,6 +749,20 @@ function applyFilters() {
       }));
     }
 
+    // Al filtrar por un ramo concreto, un mismo alumno (RUT) puede aparecer una
+    // vez por cada sección/NRC de ese ramo. Como la elegibilidad del alumno es la
+    // misma para todas las secciones, dejamos una sola fila por RUT (la de mejor
+    // SCORE). Sin filtro de ramo NO se deduplica: el alumno sí debe verse repetido
+    // cuando es candidato a distintos ramos.
+    if (state.filters.curso) {
+      const bestByRut = new Map();
+      for (const c of result) {
+        const prev = bestByRut.get(c.RUT);
+        if (!prev || (c.SCORE ?? 0) > (prev.SCORE ?? 0)) bestByRut.set(c.RUT, c);
+      }
+      result = [...bestByRut.values()];
+    }
+
     state.filtered = result;
     state.pagination.page = 1;
     renderTable();
@@ -941,10 +974,10 @@ function renderStudentTable() {
       : `<span class="tag-exp tag-exp-no">No</span>`;
     const nombre   = s.NOMBRE_COMPLETO || "—";
     const info     = state.studentInfo ? state.studentInfo[s.RUT] || {} : {};
-    const email    = info.email || `${s.RUT}@miuandes.cl`;
+    const email    = maskEmail(info.email || `${s.RUT}@miuandes.cl`, s.RUT);
     return `<tr>
       <td style="color:var(--ink-faint);font-size:0.80rem">${n}</td>
-      <td style="font-family:'Space Grotesk',sans-serif;font-weight:600">${s.RUT ?? ""}</td>
+      <td style="font-family:'Space Grotesk',sans-serif;font-weight:600">${maskRut(s.RUT)}</td>
       <td style="font-size:0.87rem">
         <div>${nombre}</div>
         <div style="font-size:0.75rem;color:var(--accent-primary);margin-top:2px"><a href="mailto:${email}" style="color:inherit;text-decoration:none">${email}</a></div>
@@ -993,6 +1026,9 @@ function renderCandidateTable() {
       const pName = pData ? pData.nombre : c.PROFESOR_POST;
       if (pName !== state.selectedProfesor) isMyCourse = false;
     }
+    // En modo profesor la nota (y las justificaciones que la contienen) solo se
+    // muestran cuando se filtró por ese mismo ramo.
+    const showGrade = isMyCourse && gradeVisible(c);
 
     const n        = start + i + 1;
     const expTimes = c.N_VECES_AYUDANTE ?? 0;
@@ -1002,8 +1038,8 @@ function renderCandidateTable() {
     const curso    = `${c.MATERIA ?? ""} ${c.CURSO ?? ""} ${c.SECC != null ? `(S${c.SECC})` : ""}`.trim();
     const nombre   = c.NOMBRE_COMPLETO || "";
     const info     = state.studentInfo ? state.studentInfo[c.RUT] || {} : {};
-    const email    = info.email || `${c.RUT}@miuandes.cl`;
-    const justifyLine = isMyCourse ? (state.aiMode ? aiJustification(c) : scoreJustification(c)) : "Métricas reservadas";
+    const email    = maskEmail(info.email || `${c.RUT}@miuandes.cl`, c.RUT);
+    const justifyLine = showGrade ? (state.aiMode ? aiJustification(c) : scoreJustification(c)) : "Métricas reservadas";
     const nAceptadas = c.N_ACEPTADAS_ACTUAL ?? 0;
     const maxWarning = nAceptadas >= 3 ? `<span class="tag-max-ta">Máx. 3 TA</span>` : "";
     const estadoPost = c.ESTADO_POSTULACION || "";
@@ -1013,7 +1049,7 @@ function renderCandidateTable() {
     return `<tr${nAceptadas >= 3 ? ' class="row-max-ta"' : ""}>
       <td style="color:var(--ink-faint);font-size:0.80rem">${n}</td>
       <td>
-        <div style="font-family:'Space Grotesk',sans-serif;font-weight:600">${c.RUT ?? ""}</div>
+        <div style="font-family:'Space Grotesk',sans-serif;font-weight:600">${maskRut(c.RUT)}</div>
         ${nombre ? `<div style="font-size:0.76rem;color:var(--ink-faint)">${nombre}</div>` : ""}
         <div style="font-size:0.72rem;color:var(--accent-primary);margin-top:2px"><a href="mailto:${email}" style="color:inherit;text-decoration:none">${email}</a></div>
         ${maxWarning}
@@ -1023,7 +1059,7 @@ function renderCandidateTable() {
         <div style="font-size:0.76rem;color:var(--ink-faint)">${c.TITULO ?? ""}</div>
         ${estadoBadge}
       </td>
-      <td style="font-weight:700">${isMyCourse ? fmt(c.NOTA_RAMO, 1) : '<span style="font-size:0.8rem;color:var(--ink-faint)">Confidencial</span>'}</td>
+      <td style="font-weight:700">${showGrade ? fmt(c.NOTA_RAMO, 1) : '<span style="font-size:0.8rem;color:var(--ink-faint)">Confidencial</span>'}</td>
       <td>${fmt(c.PGA, 2)}</td>
       <td>${expHtml}</td>
       <td>
@@ -1050,11 +1086,11 @@ const DIAS_DISPLAY = [["LUNES","Lun"],["MARTES","Mar"],["MIERCOLES","Mié"],["JU
 function openModal(candidate, rut) {
   const info  = state.studentInfo[rut] || {};
   const s     = state.studentsMap[String(rut)] || {};
-  const email = info.email || `${rut}@miuandes.cl`;
+  const email = maskEmail(info.email || `${rut}@miuandes.cl`, rut);
   const nombre = candidate.NOMBRE_COMPLETO || s.NOMBRE_COMPLETO || "";
 
-  $("modalTitle").textContent  = nombre ? `Perfil — ${nombre}` : `Perfil — RUT ${rut}`;
-  $("mRut").textContent        = rut;
+  $("modalTitle").textContent  = nombre ? `Perfil — ${nombre}` : `Perfil — RUT ${maskRut(rut)}`;
+  $("mRut").textContent        = maskRut(rut);
   $("mEmail").textContent      = email;
   $("mEmail").href             = `mailto:${email}`;
   const cursoLabel = candidate.ES_CURSO_NUEVO
@@ -1066,9 +1102,10 @@ function openModal(candidate, rut) {
     const pName = pData ? pData.nombre : candidate.PROFESOR_POST;
     if (pName !== state.selectedProfesor) isMyCourse = false;
   }
+  const showGrade = isMyCourse && gradeVisible(candidate);
 
   $("mCurso").textContent      = cursoLabel;
-  $("mNota").innerHTML         = isMyCourse
+  $("mNota").innerHTML         = showGrade
     ? (candidate.ES_CURSO_NUEVO ? `${fmt(candidate.NOTA_RAMO,1)} (inferida)` : fmt(candidate.NOTA_RAMO,1))
     : '<span style="font-size:0.85rem;color:var(--ink-faint)">Confidencial</span>';
   $("mPGA").textContent        = fmt(candidate.PGA,2);
@@ -1134,7 +1171,10 @@ function openModal(candidate, rut) {
   if (aiBlock && aiEl) {
     const allForRUT = state.allCandidates.filter(x => x.RUT === rut).sort((a,b) => (b.SCORE??0) - (a.SCORE??0));
     aiBlock.style.display = "";
-    aiEl.innerHTML = aiDetailedExplanation(candidate, allForRUT);
+    // El análisis detallado menciona la nota: solo visible para el ramo filtrado.
+    aiEl.innerHTML = showGrade
+      ? aiDetailedExplanation(candidate, allForRUT)
+      : '<p style="color:var(--ink-faint);font-size:0.85rem">Análisis detallado disponible al filtrar por este ramo.</p>';
   }
 
   $("mSched").innerHTML = DIAS_DISPLAY.map(([key,label]) => {
@@ -1163,11 +1203,12 @@ function openModal(candidate, rut) {
           const pN = pD ? pD.nombre : c.PROFESOR_POST;
           if (pN !== state.selectedProfesor) isMyC = false;
         }
+        const recShowGrade = isMyC && gradeVisible(c);
 
         const pct = Math.round((c.SCORE ?? 0) * 100);
         const asigBadge = state.aiMode && c.ASIGNADO === 1 && isMyC
           ? `<span class="tag-aptitud tag-seleccionado" style="font-size:0.72rem">✓ Asignado</span>` : "";
-        const justLine = isMyC ? (state.aiMode ? aiJustification(c) : scoreJustification(c)) : "Métricas reservadas.";
+        const justLine = recShowGrade ? (state.aiMode ? aiJustification(c) : scoreJustification(c)) : "Métricas reservadas.";
         const evalTxt = isMyC ? (state.aiMode ? pct + "%" : "Score: " + fmt(c.SCORE,3)) : `<span style="font-size:0.8rem;color:var(--ink-faint)">Confidencial</span>`;
         
         return `<div class="ta-item">
@@ -1209,11 +1250,11 @@ function openModal(candidate, rut) {
 function openStudentModal(rut) {
   const s    = state.studentsMap[String(rut)] || {};
   const info = state.studentInfo[rut] || {};
-  const email = info.email || s.email || `${rut}@miuandes.cl`;
+  const email = maskEmail(info.email || s.email || `${rut}@miuandes.cl`, rut);
   const hasCandidateData = state.allCandidates.length > 0;
 
-  $("modalTitle").textContent  = `Perfil — ${s.NOMBRE_COMPLETO || "RUT " + rut}`;
-  $("mRut").textContent        = rut;
+  $("modalTitle").textContent  = `Perfil — ${s.NOMBRE_COMPLETO || "RUT " + maskRut(rut)}`;
+  $("mRut").textContent        = maskRut(rut);
   $("mEmail").textContent      = email;
   $("mEmail").href             = `mailto:${email}`;
   $("mCurso").textContent      = hasCandidateData ? "Aplicar filtros para ver ramos" : "Cargando ramos…";
@@ -1255,11 +1296,12 @@ function openStudentModal(rut) {
     if (allForRUT.length) {
       recEl.innerHTML = allForRUT.slice(0, 6).map((c, i) => {
         const pct = Math.round((c.SCORE ?? 0) * 100);
+        const justLine = gradeVisible(c) ? scoreJustification(c) : "Métricas reservadas.";
         return `<div class="ta-item">
           <span class="ta-periodo" style="min-width:36px;text-align:center">${i===0?"★":"#"+(i+1)}</span>
           <span class="ta-curso" style="flex:1">
             <strong>${c.MATERIA??""} ${c.CURSO??""}</strong> — ${c.TITULO??""}
-            <div style="font-size:0.74rem;color:var(--ink-faint);margin-top:2px">${scoreJustification(c)}</div>
+            <div style="font-size:0.74rem;color:var(--ink-faint);margin-top:2px">${justLine}</div>
           </span>
           <span class="ta-eval">${state.aiMode ? pct+"%" : "Score: "+fmt(c.SCORE,3)}</span>
         </div>`;
@@ -1346,15 +1388,6 @@ function wireEvents() {
   dom.btnExport.addEventListener("click", exportXLSX);
   dom.btnKpis.addEventListener("click", toggleKpis);
 
-  dom.btnDemo.addEventListener("click", () => {
-    state.useDemoMode = true;
-    dom.btnDemo.classList.add("active"); dom.btnSheets.classList.remove("active");
-  });
-  dom.btnSheets.addEventListener("click", () => {
-    state.useDemoMode = false;
-    dom.btnSheets.classList.add("active"); dom.btnDemo.classList.remove("active");
-  });
-
   dom.fNotaMinima.addEventListener("input", () => { dom.notaMinimaVal.textContent=parseFloat(dom.fNotaMinima.value).toFixed(1); applyFilters(); });
   dom.fPgaMinima.addEventListener("input",  () => { dom.pgaMinimaVal.textContent =parseFloat(dom.fPgaMinima.value).toFixed(1);  applyFilters(); });
 
@@ -1397,27 +1430,6 @@ function wireEvents() {
   dom.modalOverlay.addEventListener("click", e => { if(e.target===dom.modalOverlay)closeModal(); });
   document.addEventListener("keydown", e => { if(e.key==="Escape")closeModal(); });
 
-  if (dom.userRole) {
-    dom.userRole.addEventListener("change", (e) => {
-      state.userRole = e.target.value;
-      if (state.userRole === "profesor") {
-        dom.profesorSelect.style.display = "";
-        state.selectedProfesor = dom.profesorSelect.value;
-      } else {
-        dom.profesorSelect.style.display = "none";
-        state.selectedProfesor = "";
-      }
-      
-      const validCursos = filteredCursos().map(c => c.key);
-      if (state.filters.curso && !validCursos.includes(state.filters.curso)) {
-        state.filters.curso = "";
-        const inp=$("fCursoInput"),clr=$("cursoClear");
-        if(inp){inp.value="";clr.style.display="none";}
-      }
-      applyFilters(); 
-    });
-  }
-
   if (dom.profesorSelect) {
     dom.profesorSelect.addEventListener("change", (e) => {
       state.selectedProfesor = e.target.value;
@@ -1446,12 +1458,36 @@ function updateProfesorDropdown() {
   }
 }
 
+/* Aplica el rol de la instancia: muestra el badge y, en modo profesor, el
+   selector de profesor (en admin queda oculto). */
+function applyRole() {
+  if (dom.roleBadge) {
+    dom.roleBadge.textContent = isProfesor() ? "Perfil: Profesor" : "Perfil: Administrador";
+  }
+  if (dom.profesorSelect) {
+    dom.profesorSelect.style.display = isProfesor() ? "" : "none";
+    state.selectedProfesor = isProfesor() ? dom.profesorSelect.value : "";
+  }
+}
+
+async function loadRole() {
+  try {
+    const res = await fetch(`${API}/config`);
+    if (res.ok) {
+      const cfg = await res.json();
+      state.userRole = cfg.app_role === "profesor" ? "profesor" : "admin";
+    }
+  } catch { /* sin /config: queda el rol por defecto (admin) */ }
+  applyRole();
+}
+
 /* ── Init ──────────────────────────────────────────────────────────────────── */
 async function init() {
   wireEvents();
   setupCursoPicker();
   setupDayButtons();
   setupWeightPresets();
+  await loadRole();
   await checkHealth();
 }
 

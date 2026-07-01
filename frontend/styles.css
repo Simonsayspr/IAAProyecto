@@ -206,18 +206,6 @@ input[type="range"] {
 /* Time window */
 .time-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
-/* Run mode toggle */
-.mode-toggle { display: flex; border-radius: var(--radius-sm); overflow: hidden; border: 1.5px solid var(--line); }
-.mode-toggle button {
-  flex: 1; padding: 8px 6px;
-  border: none; background: var(--card-solid);
-  font: 600 0.82rem "Space Grotesk", sans-serif;
-  color: var(--ink-soft); cursor: pointer;
-  transition: all 0.15s;
-}
-.mode-toggle button.active { background: var(--primary); color: #fff; }
-.mode-toggle button:first-child { border-right: 1px solid var(--line); }
-
 .sidebar-count {
   font-size: 0.85rem; color: var(--ink-soft);
   text-align: center; padding: 8px;
