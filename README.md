@@ -156,8 +156,7 @@ y apunta las llamadas a `http://localhost:8000`.
 | **Ex-ayudante** | Filtra por experiencia previa como ayudante |
 
 Los filtros operan **en memoria** sobre los datos ya cargados — sin re-fetch.
-Al filtrar por un curso concreto, cada alumno aparece **una sola vez** (no se
-repite por cada sección/NRC de ese ramo).
+Aunque internamente un ramo tenga varias secciones activas (diferentes NRC) y el algoritmo procese cada vacante por separado, la interfaz gráfica ha sido diseñada para agrupar estas secciones y mostrar al alumno **una sola vez** por ramo. Si el optimizador lo selecciona para alguna de las secciones de ese ramo, la fila única reflejará su estado de "Seleccionado".
 
 ---
 

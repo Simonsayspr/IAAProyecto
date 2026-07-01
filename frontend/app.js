@@ -749,19 +749,31 @@ function applyFilters() {
       }));
     }
 
-    // Al filtrar por un ramo concreto, un mismo alumno (RUT) puede aparecer una
-    // vez por cada sección/NRC de ese ramo. Como la elegibilidad del alumno es la
-    // misma para todas las secciones, dejamos una sola fila por RUT (la de mejor
-    // SCORE). Sin filtro de ramo NO se deduplica: el alumno sí debe verse repetido
-    // cuando es candidato a distintos ramos.
-    if (state.filters.curso) {
-      const bestByRut = new Map();
-      for (const c of result) {
-        const prev = bestByRut.get(c.RUT);
-        if (!prev || (c.SCORE ?? 0) > (prev.SCORE ?? 0)) bestByRut.set(c.RUT, c);
+    // Deduplicar siempre por RUT + MATERIA + CURSO para que no salgan múltiples 
+    // secciones (NRCs) del mismo ramo como filas separadas.
+    const bestByRutCurso = new Map();
+    for (const c of result) {
+      const key = `${c.RUT}-${c.MATERIA}-${c.CURSO}`;
+      const prev = bestByRutCurso.get(key);
+      if (!prev) {
+        bestByRutCurso.set(key, c);
+      } else {
+        const isAssigned = c.ASIGNADO === 1;
+        const prevAssigned = prev.ASIGNADO === 1;
+        
+        if (isAssigned && !prevAssigned) {
+          bestByRutCurso.set(key, c);
+        } else if (!isAssigned && prevAssigned) {
+          // Mantener prev
+        } else {
+          // A igual estado de asignación, priorizar mayor score
+          if ((c.SCORE ?? 0) > (prev.SCORE ?? 0)) {
+            bestByRutCurso.set(key, c);
+          }
+        }
       }
-      result = [...bestByRut.values()];
     }
+    result = [...bestByRutCurso.values()];
 
     state.filtered = result;
     state.pagination.page = 1;
