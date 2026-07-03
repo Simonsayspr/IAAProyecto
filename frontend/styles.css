@@ -206,18 +206,6 @@ input[type="range"] {
 /* Time window */
 .time-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
-/* Run mode toggle */
-.mode-toggle { display: flex; border-radius: var(--radius-sm); overflow: hidden; border: 1.5px solid var(--line); }
-.mode-toggle button {
-  flex: 1; padding: 8px 6px;
-  border: none; background: var(--card-solid);
-  font: 600 0.82rem "Space Grotesk", sans-serif;
-  color: var(--ink-soft); cursor: pointer;
-  transition: all 0.15s;
-}
-.mode-toggle button.active { background: var(--primary); color: #fff; }
-.mode-toggle button:first-child { border-right: 1px solid var(--line); }
-
 .sidebar-count {
   font-size: 0.85rem; color: var(--ink-soft);
   text-align: center; padding: 8px;
@@ -706,6 +694,83 @@ tbody tr:last-child td { border-bottom: none; }
 }
 .btn-page:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
 .btn-page:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* ── Weight preset bars ──────────────────────────────────────────────────── */
+.weight-bars { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+.weight-bar-row { display:flex; align-items:center; gap:6px; font-size:0.78rem; }
+.weight-bar-label { width:100px; color:var(--ink-soft); font-size:0.74rem; flex-shrink:0; }
+.weight-bar-track { flex:1; height:6px; background:var(--line); border-radius:3px; overflow:hidden; }
+.weight-bar-fill { height:100%; background:linear-gradient(90deg,var(--primary),var(--primary-2)); border-radius:3px; transition:width 0.3s; }
+.weight-bar-pct { width:30px; text-align:right; font-weight:600; color:var(--ink-soft); font-size:0.72rem; }
+
+/* ── AI explanation card (modal) ─────────────────────────────────────────── */
+.ai-explanation-card {
+  background: linear-gradient(135deg, rgba(0,107,89,0.06), rgba(0,148,120,0.04));
+  border: 1px solid rgba(0,107,89,0.15);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+}
+.ai-score-header {
+  display:flex; align-items:baseline; gap:10px; margin-bottom:10px;
+}
+.ai-score-pct {
+  font-family:"Space Grotesk",sans-serif;
+  font-size:2rem; font-weight:700; color:var(--primary);
+}
+.ai-score-label {
+  font-size:0.88rem; color:var(--ink-soft);
+}
+.ai-rank-note {
+  font-size:0.78rem; color:var(--ink-faint); margin-bottom:8px;
+}
+.ai-new-course-badge {
+  display:inline-block; background:var(--accent-light); color:var(--accent);
+  font-size:0.76rem; font-weight:600; padding:3px 10px; border-radius:12px;
+  margin-bottom:10px;
+}
+.ai-factors { display:flex; flex-direction:column; gap:6px; margin:10px 0; }
+.ai-factor-row { display:flex; align-items:center; gap:8px; font-size:0.82rem; }
+.ai-factor-icon { font-size:0.9rem; width:20px; text-align:center; flex-shrink:0; }
+.ai-factor-label { width:140px; color:var(--ink-soft); flex-shrink:0; font-size:0.78rem; }
+.ai-factor-bar-wrap { flex:1; height:8px; background:rgba(0,107,89,0.1); border-radius:4px; overflow:hidden; min-width:60px; }
+.ai-factor-bar { height:100%; background:linear-gradient(90deg,var(--primary),var(--primary-2)); border-radius:4px; transition:width 0.3s; }
+.ai-factor-val { width:60px; text-align:right; font-weight:600; color:var(--ink); font-size:0.78rem; flex-shrink:0; }
+.ai-summary {
+  font-size:0.80rem; color:var(--ink-soft); margin-top:10px;
+  border-top:1px solid var(--line); padding-top:8px;
+}
+
+/* ── Application status tags ──────────────────────────────────────────────── */
+.tag-estado {
+  display:inline-block; font-size:0.68rem; font-weight:600;
+  padding:1px 7px; border-radius:4px; margin-top:2px;
+}
+.tag-estado-aceptado, .tag-estado-aceptado {
+  background:rgba(26,140,90,0.12); color:#1a8c5a;
+}
+.tag-estado-rechazado, .tag-estado-rechazado {
+  background:rgba(192,57,43,0.12); color:#c0392b;
+}
+.tag-estado-pendiente, .tag-estado-pendiente {
+  background:rgba(196,122,0,0.12); color:#c47a00;
+}
+.tag-max-ta {
+  display:inline-block; font-size:0.66rem; font-weight:700;
+  padding:1px 6px; border-radius:4px; margin-top:2px;
+  background:rgba(192,57,43,0.15); color:#c0392b;
+}
+.row-max-ta { opacity:0.65; }
+
+/* ── TA type stats secondary row ─────────────────────────────────────────── */
+.stats-row-secondary {
+  gap:8px; margin-top:0;
+}
+.stat-pill-sm {
+  font-size:0.80rem; padding:6px 12px;
+}
+.stat-pill-sm strong {
+  font-size:1.1rem;
+}
 
 /* ── Responsive ───────────────────────────────────────────────────────────── */
 @media (max-width: 900px) {

@@ -34,10 +34,10 @@ _KNOWN_HEADERS = {
 
 
 def _extract_file_id(url: str) -> str:
-    m = re.search(r"/(?:spreadsheets|file)/d/([a-zA-Z0-9_-]+)", url)
-    if not m:
+    match = re.search(r"/(?:spreadsheets|file)/d/([a-zA-Z0-9_-]+)", url)
+    if not match:
         raise ValueError(f"No se pudo extraer el file ID de: {url}")
-    return m.group(1)
+    return match.group(1)
 
 
 def _smart_dataframe(rows: list) -> pd.DataFrame:
@@ -124,15 +124,17 @@ class GoogleSpreadsheetSkill:
         file_id = _extract_file_id(self._url)
         session = AuthorizedSession(self._credentials)
 
-        # Intento 1: export Sheets → xlsx (Google Sheets nativo)
+        # Intento 1: export Sheets → xlsx (solo funciona para Google Sheets nativos)
         export_url = (
             f"https://www.googleapis.com/drive/v3/files/{file_id}/export"
             "?mimeType=application%2Fvnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
         resp = session.get(export_url)
 
-        # Intento 2: descarga directa del Office file
-        if resp.status_code in (400, 415):
+        # Intento 2: descarga directa del archivo en su formato original.
+        # Un Office file (.xlsx/.xlsm) subido sin convertir no es exportable, por lo
+        # que /export responde 400/403/404/415; en ese caso usamos ?alt=media.
+        if resp.status_code != 200:
             download_url = (
                 f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
             )
@@ -141,13 +143,10 @@ class GoogleSpreadsheetSkill:
         if resp.status_code == 403:
             raise PermissionError(
                 "403 al descargar archivo de Google Drive. "
-                "El archivo es un Office file (.xlsx/.xlsm) y la cuenta de servicio "
-                "no puede descargarlo porque el Google Drive API no está habilitado "
-                "en el proyecto de Google Cloud. "
-                "Soluciones: "
-                "(A) Habilitar 'Google Drive API' en console.cloud.google.com/apis/library, "
-                "o (B) convertir cada planilla a formato Google Sheets nativo desde Google Drive "
-                "(Archivo → Guardar como Google Sheets)."
+                "La cuenta de servicio no puede descargar el archivo. "
+                "Verifica que el 'Google Drive API' esté habilitado en "
+                "console.cloud.google.com/apis/library y que la planilla esté "
+                "compartida con el correo de la cuenta de servicio."
             )
 
         resp.raise_for_status()
@@ -208,18 +207,3 @@ class GoogleSpreadsheetSkill:
                 return self._find_sheet(worksheet_name)
             raise
 
-    def get_raw_columns(self, worksheet_name: str) -> list[str]:
-        """
-        Retorna solo los nombres de columna detectados (útil para diagnóstico).
-        """
-        df = self.get_dataframe(worksheet_name)
-        return list(df.columns)
-
-    def list_worksheets(self) -> list[str]:
-        """Retorna los nombres de todas las hojas del Spreadsheet."""
-        try:
-            return [ws.title for ws in self._open().worksheets()]
-        except APIError as exc:
-            if "400" in str(exc) and "Office file" in str(exc):
-                return list(self._download_all_sheets().keys())
-            raise

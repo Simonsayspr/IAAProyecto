@@ -1,5 +1,7 @@
 /* ── Estado global ─────────────────────────────────────────────────────────── */
 const state = {
+  userRole:      "admin",        // "admin" | "profesor"
+  selectedProfesor: "",          // Nombre del profesor seleccionado
   allCandidates: [],
   filtered:      [],
   students:      [],     // lista rápida de alumnos (students_ready)
@@ -7,7 +9,8 @@ const state = {
   studentInfo:   {},
   kpiData:       null,
   cursosList:    [],
-  useDemoMode:   true,
+  taTypeCounts:  {},     // {Docente: N, Corrección: N, ...}
+  profesorMap:   {},     // {NRC: {nombre, rut}}
   loading:       false,
   aiMode:        false,
   viewMode:      "students",   // "students" | "candidates"
@@ -26,9 +29,34 @@ const API = window.location.port && window.location.port !== "80"
   ? "http://localhost:8000"
   : "/api";
 
+/* ── Rol (admin | profesor) ──────────────────────────────────────────────────
+   El rol lo fija APP_ROLE en el build y lo entrega el backend en /config.
+   En modo profesor se ocultan el RUT y las notas de ramos no filtrados. */
+function isProfesor() { return state.userRole === "profesor"; }
+
+function maskRut(rut) {
+  return isProfesor() ? "—" : (rut ?? "");
+}
+
+function maskEmail(email, rut) {
+  // El correo institucional por defecto es <rut>@dominio: ocultarlo revela el RUT.
+  if (!isProfesor() || !email) return email;
+  const [local, domain] = String(email).split("@");
+  if (domain && local === String(rut)) return `•••@${domain}`;
+  return email;
+}
+
+// El profesor solo ve la nota cuando filtró por ese mismo ramo.
+function gradeVisible(c) {
+  if (!isProfesor()) return true;
+  return !!state.filters.curso && `${c.MATERIA}-${c.CURSO}` === state.filters.curso;
+}
+
 /* ── DOM refs ──────────────────────────────────────────────────────────────── */
 const $ = id => document.getElementById(id);
 const dom = {
+  roleBadge:       $("roleBadge"),
+  profesorSelect:  $("profesorSelect"),
   statusBadge:     $("statusBadge"),
   statusText:      $("statusText"),
   loadingPanel:    $("loadingPanel"),
@@ -37,8 +65,6 @@ const dom = {
   btnAI:           $("btnAI"),
   btnExport:       $("btnExport"),
   btnKpis:         $("btnKpis"),
-  btnDemo:         $("btnDemo"),
-  btnSheets:       $("btnSheets"),
   btnClear:        $("btnClear"),
   fEscuela:        $("fEscuela"),
   fExAyudante:     $("fExAyudante"),
@@ -212,9 +238,9 @@ async function runPipeline() {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        usar_demo:      state.useDemoMode,
         nota_minima:    parseFloat(dom.fNotaMinima.value),
         max_ayudantias: 2,
+        weight_preset:  document.getElementById("fWeightPreset")?.value || "balanced",
       }),
     });
     if (!res.ok) {
@@ -357,6 +383,9 @@ function ingestStudents(data) {
 function ingestCandidates(data) {
   state.allCandidates = data.candidates || [];
   state.studentInfo   = data.student_info || {};
+  state.taTypeCounts  = data.ta_type_counts || {};
+  state.profesorMap   = data.profesor_map || {};
+  updateProfesorDropdown();
 
   // Enrich candidates with names from studentsMap
   if (Object.keys(state.studentsMap).length) {
@@ -372,8 +401,29 @@ function ingestCandidates(data) {
   dom.statAsignados.textContent  = data.n_asignados  ?? "—";
   dom.statSecciones.textContent  = data.n_secciones  ?? "—";
 
+  // Render TA type breakdown
+  renderTaTypeCounts(state.taTypeCounts);
+
   // Dejar que applyFilters() decida qué vista mostrar
   applyFilters();
+}
+
+function renderTaTypeCounts(counts) {
+  const section = document.getElementById("taTypeSection");
+  if (!section) return;
+
+  const docente = counts["Docente"] || 0;
+  const correccion = counts["Corrección"] || counts["Correccion"] || 0;
+  const laboratorio = counts["Laboratorio"] || 0;
+  const total = Object.values(counts).reduce((s, v) => s + v, 0);
+  const otro = total - docente - correccion - laboratorio;
+
+  document.getElementById("statDocente").textContent = docente;
+  document.getElementById("statCorreccion").textContent = correccion;
+  document.getElementById("statLaboratorio").textContent = laboratorio;
+  document.getElementById("statOtroTipo").textContent = Math.max(0, otro);
+
+  section.style.display = total > 0 ? "" : "none";
 }
 
 function ingestAIScores(data) {
@@ -412,8 +462,21 @@ function buildSchoolAndCoursePicker(cursos) {
 }
 
 function filteredCursos() {
+  let base = state.cursosList;
+  if (state.userRole === "profesor" && state.selectedProfesor) {
+    const profCourseKeys = new Set();
+    state.allCandidates.forEach(c => {
+      const pData = state.profesorMap[c.NRC];
+      const pName = pData ? pData.nombre : c.PROFESOR_POST;
+      if (pName === state.selectedProfesor) {
+        profCourseKeys.add(`${c.MATERIA}-${c.CURSO}`);
+      }
+    });
+    base = base.filter(c => profCourseKeys.has(c.key));
+  }
+  
   const esc = state.filters.escuela;
-  return esc ? state.cursosList.filter(c => c.prefix === esc) : state.cursosList;
+  return esc ? base.filter(c => c.prefix === esc) : base;
 }
 
 /* ── Course picker logic ───────────────────────────────────────────────────── */
@@ -556,9 +619,9 @@ function renderOneKPI(id, kpi, sMin, sMax, fmtFn) {
 }
 
 const FEAT_LABELS = {
-  NOTA_RAMO:"Nota en el ramo", PGA:"Prom. general (PGA)", PUA:"Prom. último año",
-  PROM_APROBADOS:"Prom. aprobados", CARGA_ACTUAL:"Carga académica",
-  N_VECES_AYUDANTE:"Veces ayudante", PROM_EVAL_PREVIA:"Eval. previa", POSTULANTE_ACTUAL:"Postulante actual",
+  NOTA_RAMO:"Nota en el ramo", PGA:"Prom. general (PGA)", CARGA_ACTUAL:"Carga académica",
+  N_VECES_AYUDANTE:"Veces ayudante", AVANCE_MALLA:"Avance malla",
+  PROM_EVAL_PREVIA:"Eval. previa", POSTULANTE_ACTUAL:"Postulante actual",
 };
 
 function renderFeatImportance(fi) {
@@ -574,6 +637,53 @@ function renderFeatImportance(fi) {
         <span class="feat-pct">${(v*100).toFixed(1)}%</span>
       </div>`);
   });
+}
+
+/* ── Weight Presets ────────────────────────────────────────────────────────── */
+const WEIGHT_PRESETS = {
+  balanced:   { label:"Equilibrado",           description:"Balance entre nota, promedio, experiencia y avance curricular",
+                weights:{ NOTA_RAMO:0.40, PGA:0.25, N_VECES_AYUDANTE:0.10, AVANCE_MALLA:0.15, CARGA_ACTUAL:0.05, POSTULANTE_ACTUAL:0.05 }},
+  academic:   { label:"Rendimiento académico",  description:"Prioriza nota en el ramo y promedio general",
+                weights:{ NOTA_RAMO:0.55, PGA:0.30, N_VECES_AYUDANTE:0.05, AVANCE_MALLA:0.05, CARGA_ACTUAL:0.03, POSTULANTE_ACTUAL:0.02 }},
+  experience: { label:"Experiencia previa",      description:"Prioriza experiencia como ayudante y postulación activa",
+                weights:{ NOTA_RAMO:0.25, PGA:0.15, N_VECES_AYUDANTE:0.35, AVANCE_MALLA:0.10, CARGA_ACTUAL:0.05, POSTULANTE_ACTUAL:0.10 }},
+  curriculum: { label:"Avance curricular",       description:"Prioriza alumnos avanzados en la malla con baja carga",
+                weights:{ NOTA_RAMO:0.25, PGA:0.15, N_VECES_AYUDANTE:0.05, AVANCE_MALLA:0.40, CARGA_ACTUAL:0.10, POSTULANTE_ACTUAL:0.05 }},
+};
+
+const WEIGHT_LABELS = {
+  NOTA_RAMO:"Nota en el ramo", PGA:"Promedio general",
+  N_VECES_AYUDANTE:"Experiencia previa", AVANCE_MALLA:"Avance malla",
+  CARGA_ACTUAL:"Disponibilidad (carga)", POSTULANTE_ACTUAL:"Postulante actual",
+};
+
+function renderWeightBars(presetKey) {
+  const bars = document.getElementById("weightBars");
+  if (!bars) return;
+  const preset = WEIGHT_PRESETS[presetKey];
+  if (!preset) return;
+  const w = preset.weights;
+  bars.innerHTML = Object.entries(w)
+    .sort((a,b) => b[1] - a[1])
+    .map(([k,v]) => `
+      <div class="weight-bar-row">
+        <span class="weight-bar-label">${WEIGHT_LABELS[k]||k}</span>
+        <div class="weight-bar-track"><div class="weight-bar-fill" style="width:${(v*100).toFixed(0)}%"></div></div>
+        <span class="weight-bar-pct">${(v*100).toFixed(0)}%</span>
+      </div>`).join("");
+}
+
+function setupWeightPresets() {
+  const sel = document.getElementById("fWeightPreset");
+  const desc = document.getElementById("presetDescription");
+  if (!sel) return;
+  sel.addEventListener("change", () => {
+    const key = sel.value;
+    const p = WEIGHT_PRESETS[key];
+    if (desc && p) desc.textContent = p.description;
+    renderWeightBars(key);
+  });
+  renderWeightBars("balanced");
 }
 
 /* ── Filters ───────────────────────────────────────────────────────────────── */
@@ -639,6 +749,20 @@ function applyFilters() {
       }));
     }
 
+    // Al filtrar por un ramo concreto, un mismo alumno (RUT) puede aparecer una
+    // vez por cada sección/NRC de ese ramo. Como la elegibilidad del alumno es la
+    // misma para todas las secciones, dejamos una sola fila por RUT (la de mejor
+    // SCORE). Sin filtro de ramo NO se deduplica: el alumno sí debe verse repetido
+    // cuando es candidato a distintos ramos.
+    if (state.filters.curso) {
+      const bestByRut = new Map();
+      for (const c of result) {
+        const prev = bestByRut.get(c.RUT);
+        if (!prev || (c.SCORE ?? 0) > (prev.SCORE ?? 0)) bestByRut.set(c.RUT, c);
+      }
+      result = [...bestByRut.values()];
+    }
+
     state.filtered = result;
     state.pagination.page = 1;
     renderTable();
@@ -700,26 +824,114 @@ function aptitudeTag(c) {
   return `<span class="tag-aptitud tag-candidato">Candidato</span>`;
 }
 
-/* ── AI justification (max 15 words) ──────────────────────────────────────── */
+/* ── AI justification (short for table) ───────────────────────────────────── */
 function aiJustification(c) {
   const parts = [];
   const nota = c.NOTA_RAMO ?? 0;
   const pga  = c.PGA ?? 0;
   const exp  = c.N_VECES_AYUDANTE ?? 0;
 
-  if (nota >= 6.0)      parts.push("excelente nota en el ramo");
-  else if (nota >= 5.5)  parts.push("buena nota en el ramo");
-  else                   parts.push("nota aceptable");
+  if (c.ES_CURSO_NUEVO) parts.push(`Nota inferida ${nota.toFixed(1)}`);
+  else if (nota >= 6.0)  parts.push(`Nota ${nota.toFixed(1)}`);
+  else if (nota >= 5.5)  parts.push(`Nota ${nota.toFixed(1)}`);
+  else                    parts.push(`Nota ${nota.toFixed(1)}`);
 
-  if (pga >= 5.5)       parts.push("alto promedio general");
-  else if (pga >= 5.0)  parts.push("buen promedio");
+  parts.push(`PGA ${pga.toFixed(1)}`);
 
-  if (exp > 1)          parts.push(`experiencia previa (${exp}×)`);
-  else if (exp === 1)   parts.push("con experiencia previa");
+  if (exp > 0) parts.push(`${exp}× ayudante`);
+  else if (c.POSTULANTE_ACTUAL) parts.push("postulante");
 
-  if (c.POSTULANTE_ACTUAL) parts.push("postuló este período");
+  return parts.join(" · ");
+}
 
-  return parts.join(", ");
+/* ── AI detailed explanation (for profile modal) ──────────────────────────── */
+function aiDetailedExplanation(c, allForRUT) {
+  const pct = Math.round((c.SCORE ?? 0) * 100);
+  const nota = c.NOTA_RAMO ?? 0;
+  const pga  = c.PGA ?? 0;
+  const exp  = c.N_VECES_AYUDANTE ?? 0;
+  const avance = c.AVANCE_MALLA ?? 0;
+  const carga  = c.CARGA_ACTUAL ?? 0;
+  const esNuevo = c.ES_CURSO_NUEVO || false;
+
+  // Get current preset weights
+  const presetSel = document.getElementById("fWeightPreset");
+  const presetKey = presetSel ? presetSel.value : "balanced";
+  const preset = WEIGHT_PRESETS[presetKey] || WEIGHT_PRESETS.balanced;
+  const w = preset.weights;
+
+  // Calculate contribution of each factor
+  const factors = [];
+
+  // 1. Nota en el ramo
+  const notaContrib = (nota / 7.0) * (w.NOTA_RAMO || 0);
+  if (esNuevo)
+    factors.push({ label:"Nota inferida (cursos requisito)", value:nota, max:7, contribution:notaContrib, icon:"🔮" });
+  else
+    factors.push({ label:"Nota en el ramo", value:nota, max:7, contribution:notaContrib, icon:"📝" });
+
+  // 2. PGA
+  const pgaContrib = (pga / 7.0) * (w.PGA || 0);
+  factors.push({ label:"Promedio general (PGA)", value:pga, max:7, contribution:pgaContrib, icon:"📊" });
+
+  // 3. Experiencia
+  const expContrib = (Math.min(exp, 4) / 4.0) * (w.N_VECES_AYUDANTE || 0);
+  factors.push({ label:"Experiencia previa", value:`${exp} vec${exp!==1?"es":""}`, max:null, contribution:expContrib, icon:"🎓" });
+
+  // 4. Avance malla
+  const avanceContrib = avance * (w.AVANCE_MALLA || 0);
+  factors.push({ label:"Avance curricular", value:`${(avance*100).toFixed(0)}%`, max:null, contribution:avanceContrib, icon:"📈" });
+
+  // 5. Carga
+  const cargaContrib = (1 - Math.min(carga, 8) / 8.0) * (w.CARGA_ACTUAL || 0);
+  factors.push({ label:"Disponibilidad (carga)", value:`${carga} ramos`, max:null, contribution:cargaContrib, icon:"📅" });
+
+  // 6. Postulante
+  const postContrib = (c.POSTULANTE_ACTUAL ? 1 : 0) * (w.POSTULANTE_ACTUAL || 0);
+  if (c.POSTULANTE_ACTUAL)
+    factors.push({ label:"Postuló este período", value:"Sí", max:null, contribution:postContrib, icon:"✋" });
+
+  const totalContrib = factors.reduce((s, f) => s + f.contribution, 0);
+  const maxBar = Math.max(...factors.map(f => f.contribution), 0.01);
+
+  // Build the explanation
+  let html = `<div class="ai-score-header">
+    <span class="ai-score-pct">${pct}%</span>
+    <span class="ai-score-label">recomendado · Perfil: ${preset.label}</span>
+  </div>`;
+
+  // Ranking context
+  if (allForRUT && allForRUT.length > 1) {
+    const rank = allForRUT.findIndex(x => x.NRC === c.NRC && x.MATERIA === c.MATERIA) + 1;
+    html += `<p class="ai-rank-note">Ramo #${rank} de ${allForRUT.length} opciones para este alumno</p>`;
+  }
+
+  if (esNuevo) {
+    html += `<div class="ai-new-course-badge">Curso nuevo — nota inferida desde cursos requisito</div>`;
+  }
+
+  html += `<div class="ai-factors">`;
+  factors.sort((a, b) => b.contribution - a.contribution);
+  for (const f of factors) {
+    const barW = Math.max((f.contribution / maxBar) * 100, 2);
+    const valStr = f.max != null ? `${Number(f.value).toFixed(1)} / ${f.max}` : f.value;
+    html += `<div class="ai-factor-row">
+      <span class="ai-factor-icon">${f.icon}</span>
+      <span class="ai-factor-label">${f.label}</span>
+      <div class="ai-factor-bar-wrap"><div class="ai-factor-bar" style="width:${barW.toFixed(0)}%"></div></div>
+      <span class="ai-factor-val">${valStr}</span>
+    </div>`;
+  }
+  html += `</div>`;
+
+  // Summary text
+  const topFactor = factors[0];
+  const secondFactor = factors[1];
+  html += `<p class="ai-summary">El factor más influyente es <strong>${topFactor.label.toLowerCase()}</strong>`;
+  if (secondFactor) html += `, seguido de <strong>${secondFactor.label.toLowerCase()}</strong>`;
+  html += `.</p>`;
+
+  return html;
 }
 
 /* ── Table + pagination ────────────────────────────────────────────────────── */
@@ -761,10 +973,15 @@ function renderStudentTable() {
       ? `<span class="tag-exp tag-exp-si">Sí (${expTimes}×)</span>`
       : `<span class="tag-exp tag-exp-no">No</span>`;
     const nombre   = s.NOMBRE_COMPLETO || "—";
+    const info     = state.studentInfo ? state.studentInfo[s.RUT] || {} : {};
+    const email    = maskEmail(info.email || `${s.RUT}@miuandes.cl`, s.RUT);
     return `<tr>
       <td style="color:var(--ink-faint);font-size:0.80rem">${n}</td>
-      <td style="font-family:'Space Grotesk',sans-serif;font-weight:600">${s.RUT ?? ""}</td>
-      <td style="font-size:0.87rem">${nombre}</td>
+      <td style="font-family:'Space Grotesk',sans-serif;font-weight:600">${maskRut(s.RUT)}</td>
+      <td style="font-size:0.87rem">
+        <div>${nombre}</div>
+        <div style="font-size:0.75rem;color:var(--accent-primary);margin-top:2px"><a href="mailto:${email}" style="color:inherit;text-decoration:none">${email}</a></div>
+      </td>
       <td style="font-weight:700">${fmt(s.PGA, 2)}</td>
       <td>${expHtml}</td>
       <td><button class="btn-profile btn-profile-student" data-rut="${s.RUT}">Ver perfil</button></td>
@@ -803,6 +1020,16 @@ function renderCandidateTable() {
   }
 
   dom.candidatesBody.innerHTML = slice.map((c, i) => {
+    let isMyCourse = true;
+    if (state.userRole === "profesor" && state.selectedProfesor) {
+      const pData = state.profesorMap[c.NRC];
+      const pName = pData ? pData.nombre : c.PROFESOR_POST;
+      if (pName !== state.selectedProfesor) isMyCourse = false;
+    }
+    // En modo profesor la nota (y las justificaciones que la contienen) solo se
+    // muestran cuando se filtró por ese mismo ramo.
+    const showGrade = isMyCourse && gradeVisible(c);
+
     const n        = start + i + 1;
     const expTimes = c.N_VECES_AYUDANTE ?? 0;
     const expHtml  = expTimes > 0
@@ -810,22 +1037,33 @@ function renderCandidateTable() {
       : `<span class="tag-exp tag-exp-no">No</span>`;
     const curso    = `${c.MATERIA ?? ""} ${c.CURSO ?? ""} ${c.SECC != null ? `(S${c.SECC})` : ""}`.trim();
     const nombre   = c.NOMBRE_COMPLETO || "";
-    const justifyLine = state.aiMode ? aiJustification(c) : scoreJustification(c);
-    return `<tr>
+    const info     = state.studentInfo ? state.studentInfo[c.RUT] || {} : {};
+    const email    = maskEmail(info.email || `${c.RUT}@miuandes.cl`, c.RUT);
+    const justifyLine = showGrade ? (state.aiMode ? aiJustification(c) : scoreJustification(c)) : "Métricas reservadas";
+    const nAceptadas = c.N_ACEPTADAS_ACTUAL ?? 0;
+    const maxWarning = nAceptadas >= 3 ? `<span class="tag-max-ta">Máx. 3 TA</span>` : "";
+    const estadoPost = c.ESTADO_POSTULACION || "";
+    const estadoBadge = estadoPost
+      ? `<span class="tag-estado tag-estado-${estadoPost.toLowerCase().includes("aceptad")?"aceptado":estadoPost.toLowerCase().includes("rechazad")?"rechazado":"pendiente"}">${estadoPost}</span>`
+      : "";
+    return `<tr${nAceptadas >= 3 ? ' class="row-max-ta"' : ""}>
       <td style="color:var(--ink-faint);font-size:0.80rem">${n}</td>
       <td>
-        <div style="font-family:'Space Grotesk',sans-serif;font-weight:600">${c.RUT ?? ""}</div>
+        <div style="font-family:'Space Grotesk',sans-serif;font-weight:600">${maskRut(c.RUT)}</div>
         ${nombre ? `<div style="font-size:0.76rem;color:var(--ink-faint)">${nombre}</div>` : ""}
+        <div style="font-size:0.72rem;color:var(--accent-primary);margin-top:2px"><a href="mailto:${email}" style="color:inherit;text-decoration:none">${email}</a></div>
+        ${maxWarning}
       </td>
       <td>
         <div style="font-weight:600;font-size:0.87rem">${curso}</div>
         <div style="font-size:0.76rem;color:var(--ink-faint)">${c.TITULO ?? ""}</div>
+        ${estadoBadge}
       </td>
-      <td style="font-weight:700">${fmt(c.NOTA_RAMO, 1)}</td>
+      <td style="font-weight:700">${showGrade ? fmt(c.NOTA_RAMO, 1) : '<span style="font-size:0.8rem;color:var(--ink-faint)">Confidencial</span>'}</td>
       <td>${fmt(c.PGA, 2)}</td>
       <td>${expHtml}</td>
       <td>
-        ${aptitudeTag(c)}
+        ${isMyCourse ? aptitudeTag(c) : '<span style="color:var(--ink-faint);font-size:0.85rem">Confidencial</span>'}
         <div class="score-justify">${justifyLine}</div>
       </td>
       <td><button class="btn-profile" data-idx="${start + i}">Ver perfil</button></td>
@@ -848,28 +1086,95 @@ const DIAS_DISPLAY = [["LUNES","Lun"],["MARTES","Mar"],["MIERCOLES","Mié"],["JU
 function openModal(candidate, rut) {
   const info  = state.studentInfo[rut] || {};
   const s     = state.studentsMap[String(rut)] || {};
-  const email = info.email || `${rut}@miuandes.cl`;
+  const email = maskEmail(info.email || `${rut}@miuandes.cl`, rut);
   const nombre = candidate.NOMBRE_COMPLETO || s.NOMBRE_COMPLETO || "";
 
-  $("modalTitle").textContent  = nombre ? `Perfil — ${nombre}` : `Perfil — RUT ${rut}`;
-  $("mRut").textContent        = rut;
+  $("modalTitle").textContent  = nombre ? `Perfil — ${nombre}` : `Perfil — RUT ${maskRut(rut)}`;
+  $("mRut").textContent        = maskRut(rut);
   $("mEmail").textContent      = email;
   $("mEmail").href             = `mailto:${email}`;
-  $("mCurso").textContent      = `${candidate.MATERIA??""} ${candidate.CURSO??""} — ${candidate.TITULO??""}`;
-  $("mNota").textContent       = fmt(candidate.NOTA_RAMO,1);
+  const cursoLabel = candidate.ES_CURSO_NUEVO
+    ? `${candidate.MATERIA??""} ${candidate.CURSO??""} — ${candidate.TITULO??""} (curso nuevo)`
+    : `${candidate.MATERIA??""} ${candidate.CURSO??""} — ${candidate.TITULO??""}`;
+  let isMyCourse = true;
+  if (state.userRole === "profesor" && state.selectedProfesor) {
+    const pData = state.profesorMap[candidate.NRC];
+    const pName = pData ? pData.nombre : candidate.PROFESOR_POST;
+    if (pName !== state.selectedProfesor) isMyCourse = false;
+  }
+  const showGrade = isMyCourse && gradeVisible(candidate);
+
+  $("mCurso").textContent      = cursoLabel;
+  $("mNota").innerHTML         = showGrade
+    ? (candidate.ES_CURSO_NUEVO ? `${fmt(candidate.NOTA_RAMO,1)} (inferida)` : fmt(candidate.NOTA_RAMO,1))
+    : '<span style="font-size:0.85rem;color:var(--ink-faint)">Confidencial</span>';
   $("mPGA").textContent        = fmt(candidate.PGA,2);
-  $("mPUA").textContent        = fmt(candidate.PUA,2);
-  $("mPRA").textContent        = fmt(candidate.PROM_APROBADOS,2);
+  $("mAvance").textContent     = candidate.AVANCE_MALLA != null ? `${(candidate.AVANCE_MALLA*100).toFixed(0)}%` : "—";
   $("mCarga").textContent      = candidate.CARGA_ACTUAL != null ? `${candidate.CARGA_ACTUAL} ramo(s)` : "—";
   $("mPostulante").textContent = candidate.POSTULANTE_ACTUAL ? "Sí" : "No";
 
-  // Score: en modo IA mostrar porcentaje + justificación
-  if (state.aiMode && candidate.SCORE != null) {
+  // Application status
+  const estadoPost = candidate.ESTADO_POSTULACION || "";
+  const estadoPostEl = $("mEstadoPost");
+  if (estadoPostEl) {
+    if (estadoPost) {
+      const cls = estadoPost.toLowerCase().includes("aceptad") ? "tag-estado-aceptado"
+                : estadoPost.toLowerCase().includes("rechazad") ? "tag-estado-rechazado"
+                : "tag-estado-pendiente";
+      estadoPostEl.innerHTML = `<span class="${cls}">${estadoPost}</span>`;
+    } else {
+      estadoPostEl.textContent = "No postuló a este curso";
+    }
+  }
+
+  $("mTipoAyPost").textContent = candidate.TIPO_AYUDANTE_POST || "—";
+
+  // Accepted count + max 3 warning
+  const nAceptadas = candidate.N_ACEPTADAS_ACTUAL ?? 0;
+  const nAceptEl = $("mNAceptadas");
+  if (nAceptEl) {
+    if (nAceptadas >= 3) {
+      nAceptEl.innerHTML = `<span class="tag-estado-rechazado">${nAceptadas} (máximo alcanzado)</span>`;
+    } else if (nAceptadas > 0) {
+      nAceptEl.textContent = `${nAceptadas} de 3 máximo`;
+    } else {
+      nAceptEl.textContent = "0";
+    }
+  }
+
+  // Professor info
+  const profEl = $("mProfesor");
+  if (profEl) {
+    const nrcKey = String(candidate.NRC || "");
+    const profData = state.profesorMap[nrcKey];
+    const profPost = candidate.PROFESOR_POST || "";
+    if (profData && profData.nombre) {
+      profEl.textContent = profData.nombre;
+    } else if (profPost) {
+      profEl.textContent = profPost;
+    } else {
+      profEl.textContent = "—";
+    }
+  }
+
+  // Score
+  if (candidate.SCORE != null) {
     const pct = Math.round(candidate.SCORE * 100);
-    $("mScore").innerHTML = `<span style="font-size:1.1em;font-weight:700">${pct}%</span> recomendado
-      <div style="font-size:0.78rem;color:var(--ink-faint);margin-top:4px">${aiJustification(candidate)}</div>`;
+    $("mScore").innerHTML = `<span style="font-size:1.1em;font-weight:700">${pct}%</span> recomendado`;
   } else {
-    $("mScore").textContent = candidate.SCORE != null ? candidate.SCORE.toFixed(4) : "—";
+    $("mScore").textContent = "—";
+  }
+
+  // AI explanation block
+  const aiBlock = $("mAiExplanationBlock");
+  const aiEl    = $("mAiExplanation");
+  if (aiBlock && aiEl) {
+    const allForRUT = state.allCandidates.filter(x => x.RUT === rut).sort((a,b) => (b.SCORE??0) - (a.SCORE??0));
+    aiBlock.style.display = "";
+    // El análisis detallado menciona la nota: solo visible para el ramo filtrado.
+    aiEl.innerHTML = showGrade
+      ? aiDetailedExplanation(candidate, allForRUT)
+      : '<p style="color:var(--ink-faint);font-size:0.85rem">Análisis detallado disponible al filtrar por este ramo.</p>';
   }
 
   $("mSched").innerHTML = DIAS_DISPLAY.map(([key,label]) => {
@@ -892,17 +1197,27 @@ function openModal(candidate, rut) {
       recEl.innerHTML = `<p class="ta-empty">Sin datos de recomendación.</p>`;
     } else {
       recEl.innerHTML = allForRUT.slice(0, 6).map((c, i) => {
+        let isMyC = true;
+        if (state.userRole === "profesor" && state.selectedProfesor) {
+          const pD = state.profesorMap[c.NRC];
+          const pN = pD ? pD.nombre : c.PROFESOR_POST;
+          if (pN !== state.selectedProfesor) isMyC = false;
+        }
+        const recShowGrade = isMyC && gradeVisible(c);
+
         const pct = Math.round((c.SCORE ?? 0) * 100);
-        const asigBadge = state.aiMode && c.ASIGNADO === 1
+        const asigBadge = state.aiMode && c.ASIGNADO === 1 && isMyC
           ? `<span class="tag-aptitud tag-seleccionado" style="font-size:0.72rem">✓ Asignado</span>` : "";
-        const justLine = state.aiMode ? aiJustification(c) : scoreJustification(c);
+        const justLine = recShowGrade ? (state.aiMode ? aiJustification(c) : scoreJustification(c)) : "Métricas reservadas.";
+        const evalTxt = isMyC ? (state.aiMode ? pct + "%" : "Score: " + fmt(c.SCORE,3)) : `<span style="font-size:0.8rem;color:var(--ink-faint)">Confidencial</span>`;
+        
         return `<div class="ta-item">
           <span class="ta-periodo" style="min-width:36px;text-align:center">${i===0?"★":"#"+(i+1)}</span>
           <span class="ta-curso" style="flex:1">
             <strong>${c.MATERIA??""} ${c.CURSO??""}</strong> — ${c.TITULO??""} &nbsp;${asigBadge}
             <div style="font-size:0.74rem;color:var(--ink-faint);margin-top:2px">${justLine}</div>
           </span>
-          <span class="ta-eval">${state.aiMode ? pct + "%" : "Score: " + fmt(c.SCORE,3)}</span>
+          <span class="ta-eval">${evalTxt}</span>
         </div>`;
       }).join("");
     }
@@ -917,7 +1232,10 @@ function openModal(candidate, rut) {
     list.innerHTML = sorted.map(ta => `
       <div class="ta-item">
         <span class="ta-periodo">${ta.periodo||"—"}</span>
-        <span class="ta-curso">${ta.materia??""} ${ta.curso??""} — ${ta.asignatura??""} <span style="font-size:0.76rem;color:var(--ink-faint)">(${ta.tipo||""})</span></span>
+        <span class="ta-curso">
+          ${ta.materia??""} ${ta.curso??""} — ${ta.asignatura??""} <span style="font-size:0.76rem;color:var(--ink-faint)">(${ta.tipo||""})</span>
+          ${ta.profesor ? `<div style="font-size:0.72rem;color:var(--ink-faint)">Prof: ${ta.profesor}</div>` : ""}
+        </span>
         <span class="ta-eval">${ta.evaluacion!=null?"★ "+Number(ta.evaluacion).toFixed(1):"s/eval"}</span>
       </div>`).join("");
     if (candidate.PROM_EVAL_PREVIA != null)
@@ -932,21 +1250,28 @@ function openModal(candidate, rut) {
 function openStudentModal(rut) {
   const s    = state.studentsMap[String(rut)] || {};
   const info = state.studentInfo[rut] || {};
-  const email = info.email || s.email || `${rut}@miuandes.cl`;
+  const email = maskEmail(info.email || s.email || `${rut}@miuandes.cl`, rut);
   const hasCandidateData = state.allCandidates.length > 0;
 
-  $("modalTitle").textContent  = `Perfil — ${s.NOMBRE_COMPLETO || "RUT " + rut}`;
-  $("mRut").textContent        = rut;
+  $("modalTitle").textContent  = `Perfil — ${s.NOMBRE_COMPLETO || "RUT " + maskRut(rut)}`;
+  $("mRut").textContent        = maskRut(rut);
   $("mEmail").textContent      = email;
   $("mEmail").href             = `mailto:${email}`;
   $("mCurso").textContent      = hasCandidateData ? "Aplicar filtros para ver ramos" : "Cargando ramos…";
   $("mNota").textContent       = "—";
   $("mPGA").textContent        = fmt(s.PGA, 2);
-  $("mPUA").textContent        = fmt(s.PUA, 2);
-  $("mPRA").textContent        = fmt(s.PROM_APROBADOS, 2);
+  $("mAvance").textContent     = "—";
   $("mCarga").textContent      = "—";
   $("mPostulante").textContent = "—";
+  if ($("mEstadoPost"))   $("mEstadoPost").textContent   = "—";
+  if ($("mTipoAyPost"))   $("mTipoAyPost").textContent   = "—";
+  if ($("mNAceptadas"))   $("mNAceptadas").textContent   = "—";
+  if ($("mProfesor"))     $("mProfesor").textContent     = "—";
   $("mScore").textContent      = "—";
+
+  // Hide AI explanation in student mode
+  const aiBlock = $("mAiExplanationBlock");
+  if (aiBlock) aiBlock.style.display = "none";
 
   // Disponibilidad horaria
   if (Object.keys(info.ocupado || {}).length) {
@@ -971,11 +1296,12 @@ function openStudentModal(rut) {
     if (allForRUT.length) {
       recEl.innerHTML = allForRUT.slice(0, 6).map((c, i) => {
         const pct = Math.round((c.SCORE ?? 0) * 100);
+        const justLine = gradeVisible(c) ? scoreJustification(c) : "Métricas reservadas.";
         return `<div class="ta-item">
           <span class="ta-periodo" style="min-width:36px;text-align:center">${i===0?"★":"#"+(i+1)}</span>
           <span class="ta-curso" style="flex:1">
             <strong>${c.MATERIA??""} ${c.CURSO??""}</strong> — ${c.TITULO??""}
-            <div style="font-size:0.74rem;color:var(--ink-faint);margin-top:2px">${scoreJustification(c)}</div>
+            <div style="font-size:0.74rem;color:var(--ink-faint);margin-top:2px">${justLine}</div>
           </span>
           <span class="ta-eval">${state.aiMode ? pct+"%" : "Score: "+fmt(c.SCORE,3)}</span>
         </div>`;
@@ -1062,15 +1388,6 @@ function wireEvents() {
   dom.btnExport.addEventListener("click", exportXLSX);
   dom.btnKpis.addEventListener("click", toggleKpis);
 
-  dom.btnDemo.addEventListener("click", () => {
-    state.useDemoMode = true;
-    dom.btnDemo.classList.add("active"); dom.btnSheets.classList.remove("active");
-  });
-  dom.btnSheets.addEventListener("click", () => {
-    state.useDemoMode = false;
-    dom.btnSheets.classList.add("active"); dom.btnDemo.classList.remove("active");
-  });
-
   dom.fNotaMinima.addEventListener("input", () => { dom.notaMinimaVal.textContent=parseFloat(dom.fNotaMinima.value).toFixed(1); applyFilters(); });
   dom.fPgaMinima.addEventListener("input",  () => { dom.pgaMinimaVal.textContent =parseFloat(dom.fPgaMinima.value).toFixed(1);  applyFilters(); });
 
@@ -1112,6 +1429,56 @@ function wireEvents() {
   dom.modalClose.addEventListener("click", closeModal);
   dom.modalOverlay.addEventListener("click", e => { if(e.target===dom.modalOverlay)closeModal(); });
   document.addEventListener("keydown", e => { if(e.key==="Escape")closeModal(); });
+
+  if (dom.profesorSelect) {
+    dom.profesorSelect.addEventListener("change", (e) => {
+      state.selectedProfesor = e.target.value;
+      
+      const validCursos = filteredCursos().map(c => c.key);
+      if (state.filters.curso && !validCursos.includes(state.filters.curso)) {
+        state.filters.curso = "";
+        const inp=$("fCursoInput"),clr=$("cursoClear");
+        if(inp){inp.value="";clr.style.display="none";}
+      }
+      applyFilters(); 
+    });
+  }
+}
+
+function updateProfesorDropdown() {
+  if (!dom.profesorSelect) return;
+  const profNames = new Set();
+  Object.values(state.profesorMap).forEach(p => {
+    if (p.nombre) profNames.add(p.nombre);
+  });
+  const sortedNames = Array.from(profNames).sort();
+  dom.profesorSelect.innerHTML = sortedNames.map(name => `<option value="${name}">${name}</option>`).join("");
+  if (sortedNames.length > 0 && state.userRole === "profesor") {
+    state.selectedProfesor = dom.profesorSelect.value;
+  }
+}
+
+/* Aplica el rol de la instancia: muestra el badge y, en modo profesor, el
+   selector de profesor (en admin queda oculto). */
+function applyRole() {
+  if (dom.roleBadge) {
+    dom.roleBadge.textContent = isProfesor() ? "Perfil: Profesor" : "Perfil: Administrador";
+  }
+  if (dom.profesorSelect) {
+    dom.profesorSelect.style.display = isProfesor() ? "" : "none";
+    state.selectedProfesor = isProfesor() ? dom.profesorSelect.value : "";
+  }
+}
+
+async function loadRole() {
+  try {
+    const res = await fetch(`${API}/config`);
+    if (res.ok) {
+      const cfg = await res.json();
+      state.userRole = cfg.app_role === "profesor" ? "profesor" : "admin";
+    }
+  } catch { /* sin /config: queda el rol por defecto (admin) */ }
+  applyRole();
 }
 
 /* ── Init ──────────────────────────────────────────────────────────────────── */
@@ -1119,6 +1486,8 @@ async function init() {
   wireEvents();
   setupCursoPicker();
   setupDayButtons();
+  setupWeightPresets();
+  await loadRole();
   await checkHealth();
 }
 
