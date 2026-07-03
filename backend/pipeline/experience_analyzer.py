@@ -120,9 +120,7 @@ class ExperienceAnalyzer:
         if not current_period:
             return df.copy(), pd.DataFrame()
 
-        historical = df[
-            (df["PERIODO"] < str(current_period)) | df["FUE_ACEPTADO"]
-        ]
+        historical = df[df["PERIODO"] < str(current_period)]
         current = df[df["PERIODO"] == str(current_period)]
         return historical, current
 

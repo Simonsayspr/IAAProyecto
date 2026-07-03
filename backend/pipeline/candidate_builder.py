@@ -16,7 +16,6 @@ from backend.pipeline.constants import (
     MINIMUM_GRADE_TO_BE_ELIGIBLE,
     STUDENTS_PER_TEACHING_ASSISTANT,
     WEEKDAYS,
-    generate_synthetic_name,
 )
 from backend.pipeline.column_normalizer import ColumnNormalizer
 from backend.pipeline.schedule_analyzer import ScheduleAnalyzer
@@ -99,15 +98,9 @@ class EligibleCandidateBuilder:
             .fillna(False)
         )
 
-        # Completar nombres vacios con nombres sinteticos deterministicos
+        # Si el nombre viene vacío, dejar vacío (no generar nombre sintético)
         if "NOMBRE_COMPLETO" in students.columns:
-            empty_name_mask = (
-                students["NOMBRE_COMPLETO"].fillna("").str.strip() == ""
-            )
-            if empty_name_mask.any():
-                students.loc[empty_name_mask, "NOMBRE_COMPLETO"] = (
-                    students.loc[empty_name_mask, "RUT"].apply(generate_synthetic_name)
-                )
+            students["NOMBRE_COMPLETO"] = students["NOMBRE_COMPLETO"].fillna("").str.strip()
 
         output_columns = [
             "RUT", "NOMBRE_COMPLETO", "PGA",
@@ -123,21 +116,41 @@ class EligibleCandidateBuilder:
         """
         Retorna cursos aprobados por cada alumno con nota >= minima.
 
-        Una fila por (RUT, MATERIA, CURSO) con la nota mas alta obtenida.
+        Requiere que la fila tenga NRC (confirma inscripcion real, no solo
+        plan curricular) y nota valida. Una fila por (RUT, MATERIA, CURSO)
+        con la nota mas alta obtenida.
         """
         df = self._normalizer.normalize_columns(curriculum_df)
         df["NOTA"] = self._normalizer.parse_european_decimal(df["NOTA"])
 
-        passed_mask = df["NOTA"] >= self.minimum_grade
+        # NRC no nulo → el alumno se inscribió en una sección real
+        if "NRC" in df.columns:
+            _invalid_nrc = {"", "NAN", "NONE", "0"}
+            nrc_str = df["NRC"].astype(str).str.strip().str.upper()
+            passed_mask = nrc_str.notna() & ~nrc_str.isin(_invalid_nrc)
+        else:
+            passed_mask = pd.Series([True] * len(df), index=df.index)
+
+        # Nota aprobatoria
+        passed_mask &= df["NOTA"].notna() & (df["NOTA"] >= self.minimum_grade)
+
+        # Origen válido
         if "ORIGEN" in df.columns:
             valid_origins = {"H", "OE", "TR"}
             passed_mask &= df["ORIGEN"].str.strip().str.upper().isin(valid_origins)
 
+        n_total = len(df)
         approved = df[passed_mask][["RUT", "MATERIA", "CURSO", "NOTA"]].copy()
         approved = (
             approved.sort_values("NOTA", ascending=False)
             .groupby(["RUT", "MATERIA", "CURSO"], as_index=False)
             .first()
+        )
+        has_nrc = "NRC" in df.columns
+        print(
+            f"  [Malla] {n_total} filas → {passed_mask.sum()} con NRC+nota válidos"
+            f"{'' if has_nrc else ' (sin columna NRC: solo nota+origen)'}"
+            f" → {len(approved)} pares únicos (RUT, MATERIA, CURSO)"
         )
         return approved.reset_index(drop=True)
 
@@ -290,14 +303,36 @@ class EligibleCandidateBuilder:
         student_grades_df: pd.DataFrame,
         courses_needing_ta: pd.DataFrame,
     ) -> pd.DataFrame:
-        """Infiere candidatos para cursos nuevos y los prepara con features."""
-        new_courses = self._curriculum_processor.find_new_courses_without_history(
+        """Infiere candidatos para cursos nuevos y los prepara con features.
+
+        Fuente primaria de cursos nuevos: las claves de prerequisites_map
+        (hoja 'Nueva Malla - Requisitos'). Se complementa con los cursos del
+        catalogo 'Periodo' que aún no tienen historial en la malla, para cubrir
+        el caso en que no se cargó la hoja de requisitos.
+        """
+        # Cursos con requisitos explícitos (hoja "Nueva Malla - Requisitos")
+        prereq_rows = []
+        for course_key in prerequisites_map:
+            parts = course_key.split("-", 1)
+            if len(parts) == 2:
+                prereq_rows.append({"MATERIA": parts[0], "CURSO": parts[1]})
+        new_from_prereqs = pd.DataFrame(prereq_rows) if prereq_rows else pd.DataFrame()
+
+        # Cursos del catálogo sin historial (hoja "Periodo", puede estar vacía)
+        new_from_catalog = self._curriculum_processor.find_new_courses_without_history(
             catalog_df, curriculum_df,
         )
+
+        # Unión de ambas fuentes
+        new_courses = pd.concat(
+            [new_from_prereqs, new_from_catalog[["MATERIA", "CURSO"]] if not new_from_catalog.empty else pd.DataFrame()],
+            ignore_index=True,
+        ).drop_duplicates(subset=["MATERIA", "CURSO"])
+
         if new_courses.empty:
             return pd.DataFrame()
 
-        # Solo cursos nuevos que tambien esten en el NRC actual
+        # Solo los que están en el NRC del período actual
         new_in_nrc = new_courses.merge(
             courses_needing_ta[["MATERIA", "CURSO", "NRC", "TITULO",
                                 "INSCRITOS", "AYUDANTES_REQUERIDOS"]],
@@ -305,10 +340,19 @@ class EligibleCandidateBuilder:
             how="inner",
         )
         if new_in_nrc.empty:
+            print(f"  [Cursos nuevos] {len(new_courses)} en prereqs, ninguno está en el NRC actual")
             return pd.DataFrame()
+        print(f"  [Cursos nuevos] {len(new_in_nrc)} cursos con prereqs presentes en NRC")
+
+        # Enriquecer el catálogo de títulos con los del NRC actual para que
+        # los prerrequisitos que no están en "Periodo" también se resuelvan.
+        nrc_titles = courses_needing_ta[["MATERIA", "CURSO", "TITULO"]].dropna(subset=["TITULO"])
+        augmented_catalog = pd.concat(
+            [catalog_df, nrc_titles], ignore_index=True,
+        ).drop_duplicates(subset=["MATERIA", "CURSO"])
 
         inferred = self._curriculum_processor.infer_candidates_for_new_courses(
-            new_in_nrc, prerequisites_map, catalog_df,
+            new_in_nrc, prerequisites_map, augmented_catalog,
             approved_df, student_grades_df,
         )
         if inferred.empty:
@@ -446,14 +490,7 @@ class EligibleCandidateBuilder:
         candidates = candidates.rename(columns=grade_column_mapping)
         candidates["NOMBRE_COMPLETO"] = self._normalizer.extract_full_name(candidates)
 
-        # Completar nombres vacios con nombres sinteticos deterministicos
-        empty_name_mask = (
-            candidates["NOMBRE_COMPLETO"].fillna("").str.strip() == ""
-        )
-        if empty_name_mask.any():
-            candidates.loc[empty_name_mask, "NOMBRE_COMPLETO"] = (
-                candidates.loc[empty_name_mask, "RUT"].apply(generate_synthetic_name)
-            )
+        candidates["NOMBRE_COMPLETO"] = candidates["NOMBRE_COMPLETO"].fillna("").str.strip()
         return candidates
 
     def _merge_experience_features(
@@ -502,9 +539,22 @@ class EligibleCandidateBuilder:
             applications_df, current_period,
         )
         if not application_status.empty:
+            # Campos por ramo: solo se rellenan cuando el alumno postuló exactamente a ese curso
+            per_course_cols = ["RUT", "MATERIA", "CURSO",
+                               "ESTADO_POSTULACION", "TIPO_AYUDANTE_POST", "PROFESOR_POST"]
             candidates = candidates.merge(
-                application_status, on=["RUT", "MATERIA", "CURSO"], how="left",
+                application_status[[c for c in per_course_cols if c in application_status.columns]],
+                on=["RUT", "MATERIA", "CURSO"],
+                how="left",
             )
+            # N_ACEPTADAS_ACTUAL es una propiedad del alumno (no del ramo):
+            # se une por RUT para que aparezca en TODOS sus registros candidato.
+            n_aceptadas_by_rut = (
+                application_status[["RUT", "N_ACEPTADAS_ACTUAL"]]
+                .drop_duplicates("RUT")
+            )
+            candidates = candidates.merge(n_aceptadas_by_rut, on="RUT", how="left")
+
         for column, default in [
             ("ESTADO_POSTULACION", ""),
             ("TIPO_AYUDANTE_POST", ""),

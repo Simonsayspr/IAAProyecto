@@ -9,6 +9,7 @@ const state = {
   studentInfo:   {},
   kpiData:       null,
   cursosList:    [],
+  profesoresList: [],    // [nombre, ...] sorted list for picker
   taTypeCounts:  {},     // {Docente: N, Corrección: N, ...}
   profesorMap:   {},     // {NRC: {nombre, rut}}
   loading:       false,
@@ -18,7 +19,7 @@ const state = {
     escuela:     "",
     curso:       "",
     notaMin:     5.0,
-    pgaMin:      0.0,
+    pgaMin:      1.0,
     dias:        {},
     exAyudante:  "",
   },
@@ -38,12 +39,8 @@ function maskRut(rut) {
   return isProfesor() ? "—" : (rut ?? "");
 }
 
-function maskEmail(email, rut) {
-  // El correo institucional por defecto es <rut>@dominio: ocultarlo revela el RUT.
-  if (!isProfesor() || !email) return email;
-  const [local, domain] = String(email).split("@");
-  if (domain && local === String(rut)) return `•••@${domain}`;
-  return email;
+function maskEmail(email) {
+  return email || "";
 }
 
 // El profesor solo ve la nota cuando filtró por ese mismo ramo.
@@ -56,7 +53,10 @@ function gradeVisible(c) {
 const $ = id => document.getElementById(id);
 const dom = {
   roleBadge:       $("roleBadge"),
-  profesorSelect:  $("profesorSelect"),
+  profesorPicker:   $("profesorPicker"),
+  fProfesorInput:   $("fProfesorInput"),
+  profesorClear:    $("profesorClear"),
+  profesorDropdown: $("profesorDropdown"),
   statusBadge:     $("statusBadge"),
   statusText:      $("statusText"),
   loadingPanel:    $("loadingPanel"),
@@ -96,35 +96,104 @@ const dom = {
 
 /* ── School map ────────────────────────────────────────────────────────────── */
 const SCHOOL_MAP = {
-  "IN":   "Ingeniería",
-  "IIN":  "Ing. Industrial",
-  "ICI":  "Ing. Civil",
-  "ICM":  "Ing. Comercial",
-  "ICE":  "Ing. Eléctrica",
-  "IIC":  "Ing. Informática",
-  "ME":   "Medicina",
+  // ── Ingeniería ────────────────────────────────────────────────
+  "ING":  "Ingeniería Civil",
+  "ICC":  "Ing. Civil Computación",
+  "ICE":  "Ing. Civil Eléctrica",
+  "ICI":  "Ing. Civil Industrial",
+  "ICQ":  "Ing. Civil Química",
+  "IOC":  "Ing. Civil en Obras Civiles",
+  "ICA":  "Ing. Civil Ambiental",
+  "INM":  "International Business",
+  "ADS":  "Administración de Servicios",
+  "ADM":  "Ing. Comercial",
+  "ECN":  "Economía",
+  // ── Área Salud ────────────────────────────────────────────────
   "MED":  "Medicina",
+  "MEM":  "Medicina",
+  "MAD":  "Medicina",
   "ENF":  "Enfermería",
-  "ODP":  "Odontología",
-  "AD":   "Administración",
-  "ADE":  "Administración",
-  "MAT":  "Matemáticas",
-  "FIS":  "Física",
-  "QUI":  "Química",
-  "BIO":  "Biología",
-  "CC":   "Ciencias",
-  "DE":   "Derecho",
-  "AR":   "Arquitectura",
-  "DIS":  "Diseño",
-  "COM":  "Comunicaciones",
-  "EDU":  "Educación",
+  "ENM":  "Enfermería",
+  "KIN":  "Kinesiología",
+  "KIM":  "Kinesiología",
+  "NUT":  "Nutrición y Dietética",
+  "NUM":  "Nutrición y Dietética",
+  "OBP":  "Obstetricia y Puericultura",
+  "ODO":  "Odontología",
   "PSI":  "Psicología",
+  "PSM":  "Psicología",
+  "TOC":  "Terapia Ocupacional",
+  "TOM":  "Terapia Ocupacional",
+  "FON":  "Fonoaudiología",
+  "FRM":  "Farmacia",
+  // ── Área Humanidades ──────────────────────────────────────────
+  "DER":  "Derecho",
   "FIL":  "Filosofía",
   "HIS":  "Historia",
-  "ECO":  "Economía",
-  "SOC":  "Sociología",
-  "MUS":  "Música",
-  "LIN":  "Lingüística",
+  "HIM":  "Historia",
+  "LIT":  "Literatura",
+  "LIM":  "Literatura",
+  "LPR":  "Lingüística",
+  "HUM":  "Humanidades",
+  "HPR":  "Humanidades",
+  // ── Área Comunicación ─────────────────────────────────────────
+  "MKP":  "Marketing y Publicidad",
+  "PUB":  "Marketing y Publicidad",
+  "PER":  "Periodismo y Com. Estratégica",
+  "CMN":  "Comunicación",
+  "SELL": "Comunicaciones",
+  // ── Área Educación ────────────────────────────────────────────
+  "EDU":  "Educación",
+  "DEDU": "Educación",
+  "PEB":  "Pedagogía Básica",
+  "PBM":  "Ped. Básica Bilingüe",
+  "PDM":  "Ed. de Párvulos",
+  "PED":  "Pedagogía",
+  "PBI":  "Ped. en Biología",
+  "PFI":  "Ped. en Filosofía",
+  "PHI":  "Ped. en Historia",
+  "PIN":  "Ped. en Inglés",
+  "PLC":  "Ped. en Lenguaje",
+  "PMA":  "Ped. en Matemáticas",
+  "PME":  "Ped. en Educación Media",
+  "PMR":  "Ped. en Música",
+  "PQU":  "Ped. en Química",
+  // ── Bachillerato ──────────────────────────────────────────────
+  "BACH": "Bachillerato",
+  "BAS":  "Cursos Básicos",
+  "BDE":  "Bach. Derecho",
+  "BEN":  "Bach. Enfermería",
+  "BIC":  "Bach. Ingeniería Civil",
+  "BCO":  "Bach. Ingeniería Comercial",
+  "BME":  "Bach. Medicina",
+  "BOP":  "Bach. Obstetricia y Puericultura",
+  "BOD":  "Bach. Odontología",
+  "BPS":  "Bach. Psicología",
+  "BHU":  "Bach. Humanidades",
+  "BSS":  "Bach. Cs. Sociales",
+  // ── Departamentos ─────────────────────────────────────────────
+  "DCAD": "Depto. Académico",
+  "DEM":  "Depto. de Matemáticas",
+  "DFI":  "Depto. de Física",
+  "DHI":  "Depto. de Historia",
+  "DORG": "Depto. de Organización",
+  // ── Otras áreas ───────────────────────────────────────────────
+  "ASM":  "Artes y Música",
+  "CAM":  "Canto y Música",
+  "CEG":  "Cs. Empresariales y Gestión",
+  "CEM":  "Cs. Empresariales",
+  "CFM":  "Cs. Físicas y Matemáticas",
+  "COA":  "Cs. de la Organización",
+  "EAD":  "Estudios Artísticos",
+  "EAI":  "Estudios Artísticos",
+  "EAM":  "Estudios Artísticos y Musicales",
+  "FIM":  "Física y Matemáticas",
+  "PAR":  "Arquitectura",
+  "PAV":  "Arquitectura y Urbanismo",
+  // ── Cursos transversales ──────────────────────────────────────
+  "INTE": "Integración",
+  "EXTR": "Movilidad Estudiantil",
+  "AYUD": "Ayudantías",
 };
 
 function extractPrefix(materia) {
@@ -286,17 +355,30 @@ async function runPipeline() {
 }
 
 /* ── Modo IA ───────────────────────────────────────────────────────────────── */
+function setFiltersLocked(locked) {
+  const ids = ["fEscuela", "fCursoInput", "cursoClear", "fNotaMinima",
+               "fPgaMinima", "fExAyudante", "fWeightPreset", "btnClear"];
+  ids.forEach(id => { const el = $(id); if (el) el.disabled = locked; });
+  document.querySelectorAll(".day-btn").forEach(btn => btn.disabled = locked);
+  document.querySelectorAll("#dayWindows input, #dayWindows select").forEach(el => el.disabled = locked);
+  // Visual hint
+  const sidebar = document.querySelector(".sidebar");
+  if (sidebar) sidebar.style.opacity = locked ? "0.5" : "";
+}
+
 async function runAI() {
   if (state.loading) return;
+  if (!state.filtered.length) { alert("No hay candidatos filtrados para aplicar el modelo IA."); return; }
   dom.btnAI.disabled    = true;
   dom.btnAI.textContent = "Aplicando IA…";
   setStatus("checking", "Ejecutando modelo IA…");
+  setFiltersLocked(true);
 
   try {
     const res = await fetch(`${API}/pipeline/score`, {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ candidates: state.allCandidates }),
+      body:    JSON.stringify({ candidates: state.filtered }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
@@ -335,6 +417,7 @@ async function runAI() {
     setStatus("error", "Error en modelo IA");
     alert(`Error al aplicar Modo IA:\n\n${e.message}`);
   } finally {
+    setFiltersLocked(false);
     dom.btnAI.disabled    = false;
     dom.btnAI.textContent = "Modo IA aplicado ✓";
   }
@@ -395,7 +478,7 @@ function ingestCandidates(data) {
     });
   }
 
-  buildSchoolAndCoursePicker(data.cursos || []);
+  buildSchoolAndCoursePicker(data.cursos || [], data.all_materias || []);
 
   dom.statCandidatos.textContent = data.n_candidatos ?? state.allCandidates.length;
   dom.statAsignados.textContent  = data.n_asignados  ?? "—";
@@ -427,7 +510,12 @@ function renderTaTypeCounts(counts) {
 }
 
 function ingestAIScores(data) {
-  state.allCandidates = data.candidates || [];
+  const scored = data.candidates || [];
+  // Construir lookup por RUT|NRC para mergear scores sin perder candidatos no enviados
+  const scoredMap = new Map(scored.map(c => [`${c.RUT}|${c.NRC}`, c]));
+  state.allCandidates = state.allCandidates.map(c =>
+    scoredMap.has(`${c.RUT}|${c.NRC}`) ? scoredMap.get(`${c.RUT}|${c.NRC}`) : c
+  );
   state.aiMode   = true;
   state.viewMode = "candidates";
   dom.statAsignados.textContent = data.n_asignados ?? "—";
@@ -436,7 +524,7 @@ function ingestAIScores(data) {
 }
 
 /* ── School + Course picker ────────────────────────────────────────────────── */
-function buildSchoolAndCoursePicker(cursos) {
+function buildSchoolAndCoursePicker(cursos, allMaterias) {
   state.cursosList = cursos.map(c => ({
     key:    `${c.MATERIA}-${c.CURSO}`,
     label:  `${c.MATERIA} ${c.CURSO}`,
@@ -444,8 +532,11 @@ function buildSchoolAndCoursePicker(cursos) {
     prefix: extractPrefix(c.MATERIA),
   }));
 
-  // Populate school select con prefijos de MATERIA (modo candidato)
-  const prefixes = [...new Set(state.cursosList.map(c => c.prefix))].sort();
+  // Prefijos desde todas las fuentes: NRC + Plan de Estudios + candidatos.
+  // Esto asegura que aparezcan escuelas aunque no tengan candidatos este período.
+  const fromAll = allMaterias.map(extractPrefix).filter(Boolean);
+  const fromCandidates = state.cursosList.map(c => c.prefix);
+  const prefixes = [...new Set([...fromAll, ...fromCandidates])].sort();
   dom.fEscuela.innerHTML = '<option value="">Todas las escuelas</option>';
   prefixes.forEach(p => {
     const opt = document.createElement("option");
@@ -708,8 +799,9 @@ function applyFilters() {
 
   // ── Determinar vista ──────────────────────────────────────────────────────
   // Filtros activos + datos de ramos listos → vista candidatos
+  // Profesor con datos cargados siempre ve candidatos (datos ya filtrados server-side)
   // Sin filtros (o sin datos de ramos) → vista estudiantes
-  if (active && hasCandidates) {
+  if (hasCandidates && (active || isProfesor())) {
     state.viewMode = "candidates";
   } else {
     state.viewMode = "students";
@@ -986,13 +1078,13 @@ function renderStudentTable() {
       : `<span class="tag-exp tag-exp-no">No</span>`;
     const nombre   = s.NOMBRE_COMPLETO || "—";
     const info     = state.studentInfo ? state.studentInfo[s.RUT] || {} : {};
-    const email    = maskEmail(info.email || `${s.RUT}@miuandes.cl`, s.RUT);
+    const email    = info.email || "";
     return `<tr>
       <td style="color:var(--ink-faint);font-size:0.80rem">${n}</td>
       <td style="font-family:'Space Grotesk',sans-serif;font-weight:600">${maskRut(s.RUT)}</td>
       <td style="font-size:0.87rem">
         <div>${nombre}</div>
-        <div style="font-size:0.75rem;color:var(--accent-primary);margin-top:2px"><a href="mailto:${email}" style="color:inherit;text-decoration:none">${email}</a></div>
+        ${email ? `<div style="font-size:0.75rem;color:var(--accent-primary);margin-top:2px"><a href="mailto:${email}" style="color:inherit;text-decoration:none">${email}</a></div>` : ""}
       </td>
       <td style="font-weight:700">${fmt(s.PGA, 2)}</td>
       <td>${expHtml}</td>
@@ -1034,9 +1126,12 @@ function renderCandidateTable() {
   dom.candidatesBody.innerHTML = slice.map((c, i) => {
     let isMyCourse = true;
     if (state.userRole === "profesor" && state.selectedProfesor) {
-      const pData = state.profesorMap[c.NRC];
-      const pName = pData ? pData.nombre : c.PROFESOR_POST;
-      if (pName !== state.selectedProfesor) isMyCourse = false;
+      const courseFiltered = !!state.filters.curso && `${c.MATERIA}-${c.CURSO}` === state.filters.curso;
+      if (!courseFiltered) {
+        const pData = state.profesorMap[c.NRC];
+        const pName = pData ? pData.nombre : c.PROFESOR_POST;
+        if (pName !== state.selectedProfesor) isMyCourse = false;
+      }
     }
     // En modo profesor la nota (y las justificaciones que la contienen) solo se
     // muestran cuando se filtró por ese mismo ramo.
@@ -1050,10 +1145,16 @@ function renderCandidateTable() {
     const curso    = `${c.MATERIA ?? ""} ${c.CURSO ?? ""} ${c.SECC != null ? `(S${c.SECC})` : ""}`.trim();
     const nombre   = c.NOMBRE_COMPLETO || "";
     const info     = state.studentInfo ? state.studentInfo[c.RUT] || {} : {};
-    const email    = maskEmail(info.email || `${c.RUT}@miuandes.cl`, c.RUT);
+    const email    = info.email || "";
     const justifyLine = showGrade ? (state.aiMode ? aiJustification(c) : scoreJustification(c)) : "Métricas reservadas";
     const nAceptadas = c.N_ACEPTADAS_ACTUAL ?? 0;
-    const maxWarning = nAceptadas >= 3 ? `<span class="tag-max-ta">Máx. 3 TA</span>` : "";
+    const capacityBadge = nAceptadas >= 3
+      ? `<span class="tag-max-ta">Cupo lleno (3/3)</span>`
+      : nAceptadas === 2
+        ? `<span class="tag-cupo tag-cupo-2">2/3 ayudantías</span>`
+        : nAceptadas === 1
+          ? `<span class="tag-cupo tag-cupo-1">1/3 ayudantías</span>`
+          : "";
     const estadoPost = c.ESTADO_POSTULACION || "";
     const estadoBadge = estadoPost
       ? `<span class="tag-estado tag-estado-${estadoPost.toLowerCase().includes("aceptad")?"aceptado":estadoPost.toLowerCase().includes("rechazad")?"rechazado":"pendiente"}">${estadoPost}</span>`
@@ -1063,8 +1164,8 @@ function renderCandidateTable() {
       <td>
         <div style="font-family:'Space Grotesk',sans-serif;font-weight:600">${maskRut(c.RUT)}</div>
         ${nombre ? `<div style="font-size:0.76rem;color:var(--ink-faint)">${nombre}</div>` : ""}
-        <div style="font-size:0.72rem;color:var(--accent-primary);margin-top:2px"><a href="mailto:${email}" style="color:inherit;text-decoration:none">${email}</a></div>
-        ${maxWarning}
+        ${email ? `<div style="font-size:0.72rem;color:var(--accent-primary);margin-top:2px"><a href="mailto:${email}" style="color:inherit;text-decoration:none">${email}</a></div>` : ""}
+        ${capacityBadge}
       </td>
       <td>
         <div style="font-weight:600;font-size:0.87rem">${curso}</div>
@@ -1098,21 +1199,24 @@ const DIAS_DISPLAY = [["LUNES","Lun"],["MARTES","Mar"],["MIERCOLES","Mié"],["JU
 function openModal(candidate, rut) {
   const info  = state.studentInfo[rut] || {};
   const s     = state.studentsMap[String(rut)] || {};
-  const email = maskEmail(info.email || `${rut}@miuandes.cl`, rut);
+  const email = info.email || "";
   const nombre = candidate.NOMBRE_COMPLETO || s.NOMBRE_COMPLETO || "";
 
   $("modalTitle").textContent  = nombre ? `Perfil — ${nombre}` : `Perfil — RUT ${maskRut(rut)}`;
   $("mRut").textContent        = maskRut(rut);
-  $("mEmail").textContent      = email;
-  $("mEmail").href             = `mailto:${email}`;
+  $("mEmail").textContent      = email || "—";
+  $("mEmail").href             = email ? `mailto:${email}` : "#";
   const cursoLabel = candidate.ES_CURSO_NUEVO
     ? `${candidate.MATERIA??""} ${candidate.CURSO??""} — ${candidate.TITULO??""} (curso nuevo)`
     : `${candidate.MATERIA??""} ${candidate.CURSO??""} — ${candidate.TITULO??""}`;
   let isMyCourse = true;
   if (state.userRole === "profesor" && state.selectedProfesor) {
-    const pData = state.profesorMap[candidate.NRC];
-    const pName = pData ? pData.nombre : candidate.PROFESOR_POST;
-    if (pName !== state.selectedProfesor) isMyCourse = false;
+    const courseFiltered = !!state.filters.curso && `${candidate.MATERIA}-${candidate.CURSO}` === state.filters.curso;
+    if (!courseFiltered) {
+      const pData = state.profesorMap[candidate.NRC];
+      const pName = pData ? pData.nombre : candidate.PROFESOR_POST;
+      if (pName !== state.selectedProfesor) isMyCourse = false;
+    }
   }
   const showGrade = isMyCourse && gradeVisible(candidate);
 
@@ -1122,7 +1226,8 @@ function openModal(candidate, rut) {
     : '<span style="font-size:0.85rem;color:var(--ink-faint)">Confidencial</span>';
   $("mPGA").textContent        = fmt(candidate.PGA,2);
   $("mAvance").textContent     = candidate.AVANCE_MALLA != null ? `${(candidate.AVANCE_MALLA*100).toFixed(0)}%` : "—";
-  $("mCarga").textContent      = candidate.CARGA_ACTUAL != null ? `${candidate.CARGA_ACTUAL} ramo(s)` : "—";
+  const cargaVal = info.n_ramos_inscritos ?? candidate.CARGA_ACTUAL;
+  $("mCarga").textContent      = cargaVal != null ? `${cargaVal} ramo(s)` : "—";
   $("mPostulante").textContent = candidate.POSTULANTE_ACTUAL ? "Sí" : "No";
 
   // Application status
@@ -1199,9 +1304,17 @@ function openModal(candidate, rut) {
   }).join("");
 
   // ── Cursos recomendados para este alumno ──────────────────────────────────
-  const allForRUT = state.allCandidates
+  // Deduplicar por (MATERIA, CURSO): un alumno puede ser candidato en varias
+  // secciones del mismo ramo; se muestra solo la de mayor score.
+  const seenCourse = new Map();
+  state.allCandidates
     .filter(c => c.RUT === rut)
-    .sort((a, b) => (b.SCORE ?? 0) - (a.SCORE ?? 0));
+    .sort((a, b) => (b.SCORE ?? 0) - (a.SCORE ?? 0))
+    .forEach(c => {
+      const key = `${c.MATERIA}-${c.CURSO}`;
+      if (!seenCourse.has(key)) seenCourse.set(key, c);
+    });
+  const allForRUT = [...seenCourse.values()];
 
   const recEl = $("mRecomendaciones");
   if (recEl) {
@@ -1211,9 +1324,12 @@ function openModal(candidate, rut) {
       recEl.innerHTML = allForRUT.slice(0, 6).map((c, i) => {
         let isMyC = true;
         if (state.userRole === "profesor" && state.selectedProfesor) {
-          const pD = state.profesorMap[c.NRC];
-          const pN = pD ? pD.nombre : c.PROFESOR_POST;
-          if (pN !== state.selectedProfesor) isMyC = false;
+          const courseFiltered = !!state.filters.curso && `${c.MATERIA}-${c.CURSO}` === state.filters.curso;
+          if (!courseFiltered) {
+            const pD = state.profesorMap[c.NRC];
+            const pN = pD ? pD.nombre : c.PROFESOR_POST;
+            if (pN !== state.selectedProfesor) isMyC = false;
+          }
         }
         const recShowGrade = isMyC && gradeVisible(c);
 
@@ -1246,7 +1362,7 @@ function openModal(candidate, rut) {
         <span class="ta-periodo">${ta.periodo||"—"}</span>
         <span class="ta-curso">
           ${ta.materia??""} ${ta.curso??""} — ${ta.asignatura??""} <span style="font-size:0.76rem;color:var(--ink-faint)">(${ta.tipo||""})</span>
-          ${ta.profesor ? `<div style="font-size:0.72rem;color:var(--ink-faint)">Prof: ${ta.profesor}</div>` : ""}
+          ${ta.profesor && !["nan","none",""].includes(String(ta.profesor).toLowerCase()) ? `<div style="font-size:0.72rem;color:var(--ink-faint)">Prof: ${ta.profesor}</div>` : ""}
         </span>
         <span class="ta-eval">${ta.evaluacion!=null?"★ "+Number(ta.evaluacion).toFixed(1):"s/eval"}</span>
       </div>`).join("");
@@ -1262,18 +1378,18 @@ function openModal(candidate, rut) {
 function openStudentModal(rut) {
   const s    = state.studentsMap[String(rut)] || {};
   const info = state.studentInfo[rut] || {};
-  const email = maskEmail(info.email || s.email || `${rut}@miuandes.cl`, rut);
+  const email = info.email || s.email || "";
   const hasCandidateData = state.allCandidates.length > 0;
 
   $("modalTitle").textContent  = `Perfil — ${s.NOMBRE_COMPLETO || "RUT " + maskRut(rut)}`;
   $("mRut").textContent        = maskRut(rut);
-  $("mEmail").textContent      = email;
-  $("mEmail").href             = `mailto:${email}`;
+  $("mEmail").textContent      = email || "—";
+  $("mEmail").href             = email ? `mailto:${email}` : "#";
   $("mCurso").textContent      = hasCandidateData ? "Aplicar filtros para ver ramos" : "Cargando ramos…";
   $("mNota").textContent       = "—";
   $("mPGA").textContent        = fmt(s.PGA, 2);
   $("mAvance").textContent     = "—";
-  $("mCarga").textContent      = "—";
+  $("mCarga").textContent      = info.n_ramos_inscritos != null ? `${info.n_ramos_inscritos} ramo(s)` : "—";
   $("mPostulante").textContent = "—";
   if ($("mEstadoPost"))   $("mEstadoPost").textContent   = "—";
   if ($("mTipoAyPost"))   $("mTipoAyPost").textContent   = "—";
@@ -1304,7 +1420,12 @@ function openStudentModal(rut) {
   // Recomendaciones — si ya hay datos de candidatos, mostrar ramos del alumno
   const recEl = $("mRecomendaciones");
   if (recEl) {
-    const allForRUT = state.allCandidates.filter(c => c.RUT === rut).sort((a,b) => (b.SCORE??0) - (a.SCORE??0));
+    const _seen = new Map();
+    state.allCandidates
+      .filter(c => c.RUT === rut)
+      .sort((a, b) => (b.SCORE ?? 0) - (a.SCORE ?? 0))
+      .forEach(c => { const k = `${c.MATERIA}-${c.CURSO}`; if (!_seen.has(k)) _seen.set(k, c); });
+    const allForRUT = [..._seen.values()];
     if (allForRUT.length) {
       recEl.innerHTML = allForRUT.slice(0, 6).map((c, i) => {
         const pct = Math.round((c.SCORE ?? 0) * 100);
@@ -1349,26 +1470,24 @@ function closeModal() {
 
 /* ── Clear filters ─────────────────────────────────────────────────────────── */
 function clearFilters() {
-  // Course picker
+  // Resetear controles del sidebar
   const inp = $("fCursoInput"), clr = $("cursoClear"), drp = $("cursoDropdown");
   if (inp) { inp.value=""; clr.style.display="none"; drp.style.display="none"; }
   state.filters.curso   = "";
   state.filters.escuela = "";
   dom.fEscuela.value    = "";
 
-  dom.fNotaMinima.value      = "5.0";
-  dom.fPgaMinima.value       = "0.0";
+  dom.fNotaMinima.value         = "5.0";
+  dom.fPgaMinima.value          = "0.0";
   dom.notaMinimaVal.textContent = "5.0";
   dom.pgaMinimaVal.textContent  = "0.0";
 
-  // Clear days
   dom.dayBtns.forEach(b => b.classList.remove("active"));
   dom.dayWindows.innerHTML = "";
   state.filters.dias = {};
 
-  // Clear ex-ayudante
-  dom.fExAyudante.value       = "";
-  state.filters.exAyudante    = "";
+  dom.fExAyudante.value    = "";
+  state.filters.exAyudante = "";
 
   applyFilters();
 }
@@ -1376,12 +1495,24 @@ function clearFilters() {
 /* ── Export ────────────────────────────────────────────────────────────────── */
 async function exportXLSX() {
   if (!state.filtered.length) { alert("No hay candidatos visibles para exportar."); return; }
+  if (isProfesor() && !state.filters.curso) {
+    alert("Para exportar, primero filtra por un ramo específico.");
+    return;
+  }
   dom.btnExport.disabled = true;
   dom.btnExport.textContent = "Generando…";
   try {
+    const enriched = state.filtered.map(c => {
+      const canSeeGrade = !isProfesor() || (!!state.filters.curso && `${c.MATERIA}-${c.CURSO}` === state.filters.curso);
+      return {
+        ...c,
+        email: state.studentInfo[c.RUT]?.email || "",
+        ...(canSeeGrade ? {} : { NOTA_RAMO: null }),
+      };
+    });
     const res = await fetch(`${API}/pipeline/export`, {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ candidates: state.filtered }),
+      body: JSON.stringify({ candidates: enriched }),
     });
     if (!res.ok) { const e=await res.json().catch(()=>({detail:res.statusText})); throw new Error(e.detail||res.statusText); }
     const blob = await res.blob();
@@ -1442,31 +1573,99 @@ function wireEvents() {
   dom.modalOverlay.addEventListener("click", e => { if(e.target===dom.modalOverlay)closeModal(); });
   document.addEventListener("keydown", e => { if(e.key==="Escape")closeModal(); });
 
-  if (dom.profesorSelect) {
-    dom.profesorSelect.addEventListener("change", (e) => {
-      state.selectedProfesor = e.target.value;
-      
+  setupProfesorPicker();
+}
+
+/* ── Professor picker logic ────────────────────────────────────────────────── */
+function setupProfesorPicker() {
+  const input    = dom.fProfesorInput;
+  const dropdown = dom.profesorDropdown;
+  const clearBtn = dom.profesorClear;
+  const picker   = dom.profesorPicker;
+  if (!input) return;
+
+  function render(options) {
+    dropdown.innerHTML = options.length
+      ? options.map(name => `<div class="profesor-option" data-name="${name}">${name}</div>`).join("")
+      : `<div class="profesor-option empty-option">Sin resultados</div>`;
+    dropdown.style.display = "";
+  }
+
+  function filtered(q) {
+    const names = state.profesoresList;
+    if (!q.trim()) return names;
+    const ql = q.toLowerCase();
+    return names.filter(n => n.toLowerCase().includes(ql));
+  }
+
+  const close = () => { dropdown.style.display = "none"; };
+
+  input.addEventListener("focus", () => {
+    if (state.profesoresList.length) render(filtered(input.value));
+  });
+
+  input.addEventListener("input", () => {
+    clearBtn.style.display = input.value ? "" : "none";
+    if (state.profesoresList.length) render(filtered(input.value));
+    if (!input.value) {
+      state.selectedProfesor = "";
       const validCursos = filteredCursos().map(c => c.key);
       if (state.filters.curso && !validCursos.includes(state.filters.curso)) {
         state.filters.curso = "";
-        const inp=$("fCursoInput"),clr=$("cursoClear");
-        if(inp){inp.value="";clr.style.display="none";}
+        const inp = $("fCursoInput"), clr = $("cursoClear");
+        if (inp) { inp.value = ""; clr.style.display = "none"; }
       }
-      applyFilters(); 
-    });
-  }
+      applyFilters();
+    }
+  });
+
+  dropdown.addEventListener("mousedown", e => {
+    const opt = e.target.closest(".profesor-option[data-name]");
+    if (!opt) return;
+    e.preventDefault();
+    const name = opt.dataset.name;
+    input.value = name;
+    state.selectedProfesor = name;
+    clearBtn.style.display = "";
+    close();
+    const validCursos = filteredCursos().map(c => c.key);
+    if (state.filters.curso && !validCursos.includes(state.filters.curso)) {
+      state.filters.curso = "";
+      const inp = $("fCursoInput"), clr = $("cursoClear");
+      if (inp) { inp.value = ""; clr.style.display = "none"; }
+    }
+    applyFilters();
+  });
+
+  clearBtn.addEventListener("click", () => {
+    input.value = "";
+    state.selectedProfesor = "";
+    clearBtn.style.display = "none";
+    close();
+    const validCursos = filteredCursos().map(c => c.key);
+    if (state.filters.curso && !validCursos.includes(state.filters.curso)) {
+      state.filters.curso = "";
+      const inp = $("fCursoInput"), clr = $("cursoClear");
+      if (inp) { inp.value = ""; clr.style.display = "none"; }
+    }
+    applyFilters();
+  });
+
+  document.addEventListener("click", e => { if (picker && !picker.contains(e.target)) close(); });
 }
 
 function updateProfesorDropdown() {
-  if (!dom.profesorSelect) return;
   const profNames = new Set();
   Object.values(state.profesorMap).forEach(p => {
     if (p.nombre) profNames.add(p.nombre);
   });
-  const sortedNames = Array.from(profNames).sort();
-  dom.profesorSelect.innerHTML = sortedNames.map(name => `<option value="${name}">${name}</option>`).join("");
-  if (sortedNames.length > 0 && state.userRole === "profesor") {
-    state.selectedProfesor = dom.profesorSelect.value;
+  state.profesoresList = Array.from(profNames).sort();
+  if (state.profesoresList.length > 0 && state.userRole === "profesor" && !state.selectedProfesor) {
+    state.selectedProfesor = state.profesoresList[0];
+    if (dom.fProfesorInput) {
+      dom.fProfesorInput.value = state.selectedProfesor;
+      if (dom.profesorClear) dom.profesorClear.style.display = "";
+    }
   }
 }
 
@@ -1476,9 +1675,13 @@ function applyRole() {
   if (dom.roleBadge) {
     dom.roleBadge.textContent = isProfesor() ? "Perfil: Profesor" : "Perfil: Administrador";
   }
-  if (dom.profesorSelect) {
-    dom.profesorSelect.style.display = isProfesor() ? "" : "none";
-    state.selectedProfesor = isProfesor() ? dom.profesorSelect.value : "";
+  if (dom.profesorPicker) {
+    dom.profesorPicker.style.display = isProfesor() ? "" : "none";
+  }
+  if (!isProfesor()) {
+    state.selectedProfesor = "";
+    if (dom.fProfesorInput) dom.fProfesorInput.value = "";
+    if (dom.profesorClear)  dom.profesorClear.style.display = "none";
   }
 }
 

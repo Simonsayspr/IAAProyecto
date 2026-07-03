@@ -175,6 +175,8 @@ def _compute_student_info(
     if not inscritos_df.empty:
         idf = inscritos_df.copy()
         idf.columns = [re.sub(r"\s+", " ", str(c).strip().upper()) for c in idf.columns]
+        # Acumular NRCs únicos por alumno para calcular n_ramos_inscritos
+        _nrcs_por_rut: dict[str, set] = {}
         for _, row in idf.iterrows():
             rut_raw = str(row.get("RUT", "")).strip().upper()
             if rut_raw.endswith(".0"): rut_raw = rut_raw[:-2]
@@ -184,15 +186,21 @@ def _compute_student_info(
                 continue
             if rut not in student_info:
                 student_info[rut] = {
-                    "email": f"{rut}@miuandes.cl",
+                    "email": "",
                     "ocupado": {},
                     "ayudantias_previas": [],
                 }
+            _nrcs_por_rut.setdefault(rut, set()).add(nrc_key)
             for dia, slots in nrc_schedule.get(nrc_key, {}).items():
                 student_info[rut]["ocupado"].setdefault(dia, []).extend(slots)
+        # Guardar conteo de ramos inscritos directamente desde la misma fuente
+        for rut_key, nrcs in _nrcs_por_rut.items():
+            student_info[rut_key]["n_ramos_inscritos"] = len(nrcs)
 
     # ── Historial de ayudantías + postulaciones actuales ────────────────────
-    ACEPTADO = {"aceptado", "aprobado", "activo", "seleccionado"}
+    ACEPTADO = {"aceptado", "aprobado"}
+    # Rastrear (rut, periodo, materia, curso) ya agregados al historial
+    _seen_historial: dict[str, set] = {}
     if postulaciones_df is not None and not postulaciones_df.empty:
         pdf = postulaciones_df.copy()
         pdf.columns = [str(c).strip().upper() for c in pdf.columns]
@@ -207,7 +215,7 @@ def _compute_student_info(
                 continue
             if rut not in student_info:
                 student_info[rut] = {
-                    "email": f"{rut}@miuandes.cl",
+                    "email": "",
                     "ocupado": {},
                     "ayudantias_previas": [],
                     "postulaciones_actuales": [],
@@ -215,24 +223,31 @@ def _compute_student_info(
             if "postulaciones_actuales" not in student_info[rut]:
                 student_info[rut]["postulaciones_actuales"] = []
             correo = str(row.get("CORREO", "")).strip()
-            if "@" in correo:
+            if correo and correo.lower() not in ("nan", "none") and "@" in correo:
                 student_info[rut]["email"] = correo
 
-            profesor = str(row.get("PROFESOR", "")).strip()
+            raw_prof = str(row.get("PROFESOR", "")).strip()
+            profesor = raw_prof if raw_prof.lower() not in ("nan", "none", "") else ""
             tipo_ay = str(row.get("TIPO DE AYUDANTE", "")).strip()
 
             if estado_lower in ACEPTADO:
-                matched_experiencia += 1
-                eval_raw = str(row.get("EVALUACIÓN", row.get("EVALUACION", ""))).strip()
-                student_info[rut]["ayudantias_previas"].append({
-                    "periodo":    str(row.get("PERIODO", "")),
-                    "materia":    str(row.get("MATERIA", "")),
-                    "curso":      str(row.get("CURSO", "")),
-                    "asignatura": str(row.get("ASIGNATURA", "")),
-                    "evaluacion": eval_raw if eval_raw not in ("", "nan", "None") else None,
-                    "tipo":       tipo_ay,
-                    "profesor":   profesor,
-                })
+                periodo_h  = str(row.get("PERIODO", ""))
+                materia_h  = str(row.get("MATERIA", ""))
+                curso_h    = str(row.get("CURSO", ""))
+                hist_key   = f"{periodo_h}|{materia_h}|{curso_h}"
+                if hist_key not in _seen_historial.setdefault(rut, set()):
+                    _seen_historial[rut].add(hist_key)
+                    matched_experiencia += 1
+                    eval_raw = str(row.get("EVALUACIÓN", row.get("EVALUACION", ""))).strip()
+                    student_info[rut]["ayudantias_previas"].append({
+                        "periodo":    periodo_h,
+                        "materia":    materia_h,
+                        "curso":      curso_h,
+                        "asignatura": str(row.get("ASIGNATURA", "")),
+                        "evaluacion": eval_raw if eval_raw not in ("", "nan", "None") else None,
+                        "tipo":       tipo_ay,
+                        "profesor":   profesor,
+                    })
 
             # Postulaciones del periodo actual
             periodo = str(row.get("PERIODO", "")).strip()
@@ -395,8 +410,42 @@ def run(req: PipelineRequest):
             # ── Fase 4: horarios y historial ───────────────────────────────
             yield _sse({"type": "progress", "step": 3, "msg": "Calculando disponibilidad horaria de candidatos…"})
 
-            cursos_df = candidates_df[["MATERIA", "CURSO", "TITULO"]].drop_duplicates().sort_values(["MATERIA", "CURSO"])
-            cursos    = _df_to_records(cursos_df)
+            # Cursos disponibles para el filtro = todos los activos del NRC
+            # (no solo los que tienen candidatos) + los que ya tienen candidatos.
+            _nrc_norm = nrc.copy()
+            _nrc_norm.columns = [c.strip().upper() for c in _nrc_norm.columns]
+            _nrc_cursos_cols = [c for c in ["MATERIA", "CURSO", "TITULO"] if c in _nrc_norm.columns]
+            nrc_cursos_df = (
+                _nrc_norm[_nrc_cursos_cols]
+                .dropna(subset=["MATERIA", "CURSO"])
+                .drop_duplicates(subset=["MATERIA", "CURSO"])
+            )
+            _cand_cursos = candidates_df[
+                [c for c in ["MATERIA", "CURSO", "TITULO"] if c in candidates_df.columns]
+            ].drop_duplicates(subset=["MATERIA", "CURSO"])
+            cursos_df = (
+                pd.concat([nrc_cursos_df, _cand_cursos], ignore_index=True)
+                .drop_duplicates(subset=["MATERIA", "CURSO"])
+                .sort_values(["MATERIA", "CURSO"])
+            )
+            cursos = _df_to_records(cursos_df)
+
+            # Unión de MATERIAs de NRC + Plan de Estudios para el filtro de escuelas.
+            # Incluye todas las escuelas aunque no tengan candidatos en este período.
+            _mat_sources = []
+            if "MATERIA" in nrc.columns:
+                _mat_sources.append(nrc["MATERIA"].dropna().astype(str))
+            if catalog_df is not None and "MATERIA" in catalog_df.columns:
+                _mat_sources.append(catalog_df["MATERIA"].dropna().astype(str))
+            if _mat_sources:
+                _all_mat = pd.concat(_mat_sources).str.strip()
+                all_materias = sorted(
+                    m for m in _all_mat.unique()
+                    if m and m.lower() not in ("nan", "none")
+                )
+            else:
+                all_materias = []
+
             student_info = _compute_student_info(inscritos, nrc, post_df)
 
             # Compute dashboard stats: count by TA type
@@ -435,6 +484,7 @@ def run(req: PipelineRequest):
                 "candidates":      _df_to_records(candidates_df),
                 "student_info":    student_info,
                 "cursos":          cursos,
+                "all_materias":    all_materias,
                 "n_candidatos":    len(candidates_df),
                 "n_asignados":     0,
                 "n_secciones":     int(candidates_df["NRC"].nunique()) if "NRC" in candidates_df.columns else 0,
@@ -535,33 +585,22 @@ def last_result():
 
 
 COLS_EXPORT = [
-    "RUT", "NOMBRE_COMPLETO", "MATERIA", "CURSO", "TITULO", "NRC",
-    "NOTA_RAMO", "PGA", "AVANCE_MALLA",
-    "N_VECES_AYUDANTE", "PROM_EVAL_PREVIA", "POSTULANTE_ACTUAL",
-    "ESTADO_POSTULACION", "TIPO_AYUDANTE_POST", "N_ACEPTADAS_ACTUAL",
-    "CARGA_ACTUAL", "SCORE", "ASIGNADO", "ES_CURSO_NUEVO",
+    "NOMBRE_COMPLETO", "TITULO", "MATERIA", "CURSO",
+    "PGA", "email", "N_VECES_AYUDANTE", "PROM_EVAL_PREVIA",
+    "POSTULANTE_ACTUAL", "NOTA_RAMO",
 ]
 
 COLS_LABELS = {
-    "RUT": "RUT",
-    "NOMBRE_COMPLETO": "Nombre",
-    "MATERIA": "Materia",
-    "CURSO": "Curso",
-    "TITULO": "Asignatura",
-    "NRC": "NRC",
-    "NOTA_RAMO": "Nota en el ramo",
-    "PGA": "Promedio general (PGA)",
-    "AVANCE_MALLA": "Avance malla curricular",
-    "N_VECES_AYUDANTE": "Veces ayudante previo",
-    "PROM_EVAL_PREVIA": "Prom. evaluacion previa",
-    "POSTULANTE_ACTUAL": "Es postulante actual",
-    "ESTADO_POSTULACION": "Estado postulacion",
-    "TIPO_AYUDANTE_POST": "Tipo ayudante postulado",
-    "N_ACEPTADAS_ACTUAL": "Ayudantias aceptadas (periodo)",
-    "CARGA_ACTUAL": "Ramos inscritos actuales",
-    "SCORE": "Score",
-    "ASIGNADO": "Asignado ILP",
-    "ES_CURSO_NUEVO": "Curso nuevo (inferido)",
+    "NOMBRE_COMPLETO":  "Nombre",
+    "TITULO":           "Nombre del ramo",
+    "MATERIA":          "Materia",
+    "CURSO":            "NRC",
+    "PGA":              "GPA",
+    "email":            "Correo miuandes",
+    "N_VECES_AYUDANTE": "Veces ayudante (Global)",
+    "PROM_EVAL_PREVIA": "Prom. evaluación (ayudante)",
+    "POSTULANTE_ACTUAL":"Postulante ser ayudante a este ramo (Actualidad)",
+    "NOTA_RAMO":        "Nota final en el ramo",
 }
 
 
@@ -575,6 +614,13 @@ def export_filtered(req: ExportRequest):
         raise HTTPException(status_code=400, detail="No hay candidatos para exportar.")
 
     df = pd.DataFrame(req.candidates)
+
+    # Convertir booleano a SI/NO
+    if "POSTULANTE_ACTUAL" in df.columns:
+        df["POSTULANTE_ACTUAL"] = df["POSTULANTE_ACTUAL"].map(
+            lambda v: "SI" if v else "NO"
+        )
+
     existing = [c for c in COLS_EXPORT if c in df.columns]
     df_out = df[existing].rename(columns=COLS_LABELS)
 
@@ -586,8 +632,8 @@ def export_filtered(req: ExportRequest):
         if "ASIGNADO" in df.columns:
             asig = df[df["ASIGNADO"] == 1]
             if not asig.empty:
-                cols_asig = [c for c in ["RUT", "MATERIA", "CURSO", "TITULO", "NRC", "NOTA_RAMO", "PGA", "SCORE"] if c in asig.columns]
-                asig[cols_asig].rename(columns=COLS_LABELS).to_excel(
+                asig_existing = [c for c in COLS_EXPORT if c in asig.columns]
+                asig[asig_existing].rename(columns=COLS_LABELS).to_excel(
                     writer, sheet_name="Asignados en filtro", index=False
                 )
 

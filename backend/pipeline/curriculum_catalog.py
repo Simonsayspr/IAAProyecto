@@ -24,6 +24,19 @@ class CurriculumCatalogProcessor:
     def __init__(self):
         self._normalizer = ColumnNormalizer()
 
+    @staticmethod
+    def _normalize_title(raw: str) -> str:
+        """Normaliza un título de curso para comparación robusta.
+
+        Elimina cualquier sufijo entre paréntesis (ej. "(p)", "(req)", "(I)"),
+        colapsa espacios múltiples y convierte a mayúsculas.
+        Se aplica a ambos lados del emparejamiento para que el match no dependa
+        de variaciones de formato en las planillas.
+        """
+        cleaned = re.sub(r"\s*\([^)]*\)\s*$", "", raw.strip())
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned.upper()
+
     def load_course_catalog(
         self, catalog_df: pd.DataFrame,
     ) -> pd.DataFrame:
@@ -53,9 +66,8 @@ class CurriculumCatalogProcessor:
             course_key = f"{row.get('MATERIA', '')}-{row.get('CURSO', '')}"
             raw_requisites = str(row.get("REQUISITOS", "")).strip()
             if raw_requisites:
-                # Separar por coma, limpiar " (p)" y espacios
                 requisites = [
-                    re.sub(r"\s*\(p\)\s*", "", item).strip()
+                    self._normalize_title(item)
                     for item in raw_requisites.split(",")
                     if item.strip()
                 ]
@@ -149,58 +161,91 @@ class CurriculumCatalogProcessor:
 
         catalog = self._normalizer.normalize_columns(catalog_df)
 
-        # Mapa de titulo -> MATERIA-CURSO para resolver requisitos por nombre
-        title_to_key = {}
+        # Mapa normalizado: titulo_normalizado -> MATERIA-CURSO
+        # Se aplica _normalize_title a ambos lados del emparejamiento para
+        # absorber variaciones de formato (tildes, espacios, sufijos entre paréntesis).
+        title_to_key: Dict[str, str] = {}
         for _, row in catalog.iterrows():
-            titulo = str(row.get("TITULO", "")).strip().upper()
-            if titulo:
-                title_to_key[titulo] = f"{row['MATERIA']}-{row['CURSO']}"
+            raw = str(row.get("TITULO", "")).strip()
+            if raw:
+                title_to_key[self._normalize_title(raw)] = (
+                    f"{row['MATERIA']}-{row['CURSO']}"
+                )
+
+        # Precalcular clave de curso aprobado por fila (evita iterar con apply repetido)
+        if not approved_courses_df.empty:
+            approved_copy = approved_courses_df.copy()
+            approved_copy["_KEY"] = (
+                approved_copy["MATERIA"].astype(str)
+                + "-"
+                + approved_copy["CURSO"].astype(str)
+            )
+        else:
+            approved_copy = pd.DataFrame()
 
         inferred_rows = []
 
         for _, course in new_courses_df.iterrows():
             course_key = f"{course['MATERIA']}-{course['CURSO']}"
+            # prereq_titles ya vienen normalizados desde load_prerequisites
             prereq_titles = prerequisites_map.get(course_key, [])
 
-            # Resolver titulos de requisitos a MATERIA-CURSO
-            prereq_keys = []
+            # Resolver títulos a claves MATERIA-CURSO (deduplicados)
+            prereq_key_set: set[str] = set()
+            unresolved = []
             for title in prereq_titles:
-                title_upper = title.strip().upper()
-                if title_upper in title_to_key:
-                    prereq_keys.append(title_to_key[title_upper])
+                key = title_to_key.get(title)
+                if key:
+                    prereq_key_set.add(key)
+                else:
+                    unresolved.append(title)
 
-            if prereq_keys and not approved_courses_df.empty:
-                # Buscar alumnos que aprobaron los requisitos
-                for _, approved_row in approved_courses_df.iterrows():
-                    approved_key = (
-                        f"{approved_row['MATERIA']}-{approved_row['CURSO']}"
-                    )
-                    if approved_key in prereq_keys:
-                        inferred_rows.append({
-                            "RUT": approved_row["RUT"],
-                            "MATERIA": course["MATERIA"],
-                            "CURSO": course["CURSO"],
-                            "TITULO": course.get("TITULO", ""),
-                            "NOTA_INFERIDA": float(approved_row.get("NOTA", 0)),
-                            "FUENTE_INFERENCIA": f"Requisito: {approved_key}",
-                            "ES_CURSO_NUEVO": True,
-                        })
+            if unresolved:
+                print(
+                    f"  [Info] Requisitos sin match en catálogo para {course_key}: "
+                    f"{unresolved}"
+                )
+
+            if not prereq_key_set or approved_copy.empty:
+                continue
+
+            # Alumnos que aprobaron cursos en el conjunto de requisitos
+            relevant = approved_copy[approved_copy["_KEY"].isin(prereq_key_set)]
+            if relevant.empty:
+                continue
+
+            # Contar cuántos requisitos distintos aprobó cada alumno y nota media
+            per_student = (
+                relevant.groupby("RUT")
+                .agg(
+                    n_req_aprobados=("_KEY", "nunique"),
+                    nota_media=("NOTA", "mean"),
+                )
+                .reset_index()
+            )
+
+            # Solo alumnos que aprobaron TODOS los requisitos resolvibles
+            eligible = per_student[
+                per_student["n_req_aprobados"] >= len(prereq_key_set)
+            ]
+
+            n_total = len(prereq_key_set)
+            for _, elig in eligible.iterrows():
+                inferred_rows.append({
+                    "RUT": elig["RUT"],
+                    "MATERIA": course["MATERIA"],
+                    "CURSO": course["CURSO"],
+                    "TITULO": course.get("TITULO", ""),
+                    "NOTA_INFERIDA": float(elig["nota_media"]),
+                    "FUENTE_INFERENCIA": (
+                        f"Requisitos cumplidos: {n_total}/{n_total}"
+                    ),
+                    "ES_CURSO_NUEVO": True,
+                })
 
         if not inferred_rows:
             return pd.DataFrame()
 
         result = pd.DataFrame(inferred_rows)
-
-        # Promediar si un alumno tiene multiples requisitos aprobados
-        result = (
-            result.groupby(["RUT", "MATERIA", "CURSO", "TITULO"])
-            .agg(
-                NOTA_INFERIDA=("NOTA_INFERIDA", "mean"),
-                FUENTE_INFERENCIA=("FUENTE_INFERENCIA", "first"),
-            )
-            .reset_index()
-        )
-        result["ES_CURSO_NUEVO"] = True
         result["NOTA_RAMO"] = result["NOTA_INFERIDA"]
-
         return result

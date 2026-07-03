@@ -189,19 +189,24 @@ input[type="range"] {
 }
 
 /* Day buttons */
-.day-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.day-btns { display: flex; gap: 5px; flex-wrap: wrap; }
 .day-btn {
-  width: 36px; height: 36px; border-radius: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 20px;
   border: 1.5px solid var(--line);
   background: var(--card-solid);
-  font: 600 0.82rem "Space Grotesk", sans-serif;
+  font: 600 0.78rem "Space Grotesk", sans-serif;
   color: var(--ink-soft);
   cursor: pointer;
+  white-space: nowrap;
   transition: all 0.15s;
   display: grid; place-items: center;
 }
 .day-btn:hover  { border-color: var(--primary); color: var(--primary); }
 .day-btn.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+.day-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* Time window */
 .time-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -294,6 +299,57 @@ input[type="range"] {
   transition: background 0.35s ease;
 }
 .step-line.done { background: var(--primary); }
+
+/* ── Profesor picker (topbar) ──────────────────────────────────────────────── */
+.profesor-picker {
+  position: relative;
+  width: 220px;
+}
+.profesor-input-wrap {
+  position: relative; display: flex; align-items: center;
+}
+.profesor-input-wrap input {
+  width: 100%;
+  padding: 7px 28px 7px 11px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card-solid);
+  font: inherit; font-size: 0.88rem;
+  color: var(--ink);
+  transition: border-color 0.18s;
+}
+.profesor-input-wrap input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-light);
+}
+.profesor-clear {
+  position: absolute; right: 8px;
+  background: none; border: none; cursor: pointer;
+  color: var(--ink-faint); font-size: 0.88rem; line-height: 1;
+  padding: 2px 4px; border-radius: 4px;
+  transition: color 0.15s;
+}
+.profesor-clear:hover { color: var(--ink); }
+.profesor-dropdown {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+  background: var(--card-solid);
+  border: 1.5px solid var(--primary);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  max-height: 200px; overflow-y: auto;
+  z-index: 300;
+  animation: fadeIn 0.12s ease;
+}
+.profesor-option {
+  padding: 9px 12px; cursor: pointer;
+  font-size: 0.87rem; color: var(--ink);
+  border-bottom: 1px solid var(--line);
+  transition: background 0.1s;
+}
+.profesor-option:last-child { border-bottom: none; }
+.profesor-option:hover { background: var(--primary-light); }
+.profesor-option.empty-option { color: var(--ink-faint); cursor: default; font-style: italic; }
 
 /* ── Custom course picker ─────────────────────────────────────────────────── */
 .curso-picker { position: relative; }
@@ -760,6 +816,12 @@ tbody tr:last-child td { border-bottom: none; }
   background:rgba(192,57,43,0.15); color:#c0392b;
 }
 .row-max-ta { opacity:0.65; }
+.tag-cupo {
+  display:inline-block; font-size:0.66rem; font-weight:700;
+  padding:1px 6px; border-radius:4px; margin-top:2px;
+}
+.tag-cupo-1 { background:rgba(196,122,0,0.12); color:#c47a00; }
+.tag-cupo-2 { background:rgba(192,100,0,0.16); color:#d35400; }
 
 /* ── TA type stats secondary row ─────────────────────────────────────────── */
 .stats-row-secondary {

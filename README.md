@@ -37,6 +37,30 @@ candidatos que el profesor tiene filtrados en pantalla.
 
 ---
 
+## Dependencias
+
+Las dependencias se instalan automáticamente con `pip install -r requirements.txt`. La versión mínima de Python requerida es **3.11**.
+
+| Librería | Versión mínima | Uso en el proyecto |
+|---|---|---|
+| `gspread` | 6.0.0 | Lectura de Google Sheets vía API |
+| `google-auth` | 2.29.0 | Autenticación con Service Account de Google Cloud |
+| `google-auth-oauthlib` | 1.2.0 | Soporte OAuth complementario a `google-auth` |
+| `pandas` | 2.2.0 | Cruce, limpieza y transformación de datos tabulares |
+| `numpy` | 1.26.0 | Operaciones numéricas y cálculo de scores |
+| `openpyxl` | 3.1.0 | Generación de archivos Excel en el endpoint de exportación |
+| `scikit-learn` | 1.4.0 | Métricas de evaluación del modelo (F1-Score, precisión, recall) |
+| `xgboost` | 2.0.0 | Modelo de clasificación (gradient boosting) para el score de idoneidad |
+| `pulp` | 2.8.0 | Optimización por Programación Lineal Entera (ILP) con solver CBC |
+| `fastapi` | 0.111.0 | Framework de la API REST con soporte nativo para Server-Sent Events |
+| `uvicorn[standard]` | 0.29.0 | Servidor ASGI para ejecutar FastAPI |
+| `pydantic` | 2.7.0 | Validación y serialización de los modelos de datos de la API |
+| `python-dotenv` | 1.0.0 | Carga de variables de entorno desde el archivo `.env` |
+
+> El frontend no tiene dependencias de npm: usa HTML/CSS/JS vanilla servido por **nginx:alpine**.
+
+---
+
 ## Levantar con Docker (recomendado)
 
 ### Requisitos previos
@@ -63,6 +87,8 @@ Edita `.env` con:
 | `SPREADSHEET_URL_POSTULACIONES` | URL de la hoja *Postulaciones a ayudantías* |
 | `SPREADSHEET_URL_PLAN_ESTUDIOS` | (opcional) URL del *Plan de Estudios / Malla Nueva* |
 | `APP_ROLE` | Rol de la instancia: `admin` (facultad) o `profesor` |
+| `NOTA_MINIMA_AYUDANTE` | (opcional) Nota mínima para ser candidato. Por defecto `5.0` |
+| `MAX_AYUDANTIAS_ALUMNO` | (opcional) Máximo de ayudantías simultáneas. Por defecto `3` |
 
 > **Compartir las planillas:** cada Spreadsheet debe estar compartido con el
 > email de la Service Account (`...@...iam.gserviceaccount.com`) como Lector o
@@ -73,10 +99,15 @@ Edita `.env` con:
 ### 2 — Construir y levantar
 
 ```bash
-docker-compose up --build
+docker-compose up --build -d
 ```
 
 La primera vez tarda un poco mientras construye la imagen (Python sobre Alpine).
+El flag `-d` ejecuta los contenedores en segundo plano. Para ver los logs en tiempo real:
+
+```bash
+docker-compose logs -f
+```
 
 ### 3 — Abrir la app
 
