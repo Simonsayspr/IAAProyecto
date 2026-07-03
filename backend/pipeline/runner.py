@@ -99,7 +99,7 @@ def run_pipeline_ai(
 
     reporter = KPIReporter()
     kpi1 = reporter.compute_predictive_capability_kpi(scorer.f1_score_)
-    kpi2 = reporter.compute_performance_quality_kpi(postulaciones_df)
+    kpi2 = reporter.compute_renewal_rate_kpi(result)
     kpi3 = reporter.compute_constraint_coverage_kpi(result)
     reporter.print_report(kpi1, kpi2, kpi3, result)
 

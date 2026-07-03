@@ -45,26 +45,19 @@ KPI_METADATA = {
         ),
     },
     "kpi2": {
-        "nombre": "Calidad promedio del desempeno de los ayudantes",
-        "formula": (
-            "KPI2 = (Pa1 + Pa2 + ... + Pam + Pa1' + Pa2' + ... + Pan') / (m + n)\n"
-            "  donde Pa1..Pam = puntajes de ayudantias en semestre t-1 (m instancias)\n"
-            "        Pa1'..Pan' = puntajes de ayudantias en semestre t  (n instancias)"
-        ),
+        "nombre": "Tasa de Renovacion de la Academia (TRA)",
+        "formula": "TRA = Ayudantes Nuevos Asignados / Total Ayudantes Asignados",
         "variables": {
-            "Pai":  "Puntaje de la ayudantia i en el semestre t-1 (escala 1-7)",
-            "Pai'": "Puntaje de la ayudantia i en el semestre t   (escala 1-7)",
-            "m":    "Total de instancias de ayudantia evaluadas en semestre t-1",
-            "n":    "Total de instancias de ayudantia evaluadas en semestre t",
+            "Ayudantes Nuevos Asignados": "Ayudantes asignados que no tienen experiencia previa (N_VECES_AYUDANTE = 0)",
+            "Total Ayudantes Asignados": "Total de ayudantes asignados por el modelo (ASIGNADO = 1)",
         },
-        "baseline": None,
+        "baseline": 0.15,
         "baseline_nota": (
-            "Sin sistema formal de evaluacion — baseline = 0 / no medible. "
-            "Requiere reinstaurar encuestas estructuradas en 2 instancias por semestre."
+            "Proceso manual actual: se estima un 10-15% (bucle de contratar a los mismos por seguridad)"
         ),
-        "meta": 5.0,
+        "meta": 0.25,
         "meta_nota": (
-            "Promedio >= 5.0 en escala 1-7 (equivale a nota 'buena' en el ramo)"
+            "Se busca una TRA entre 25% y 45% para romper el bucle y democratizar las oportunidades"
         ),
     },
     "kpi3": {
@@ -130,13 +123,11 @@ class KPIReporter:
         }
 
     @staticmethod
-    def compute_performance_quality_kpi(
-        applications_df: Optional[pd.DataFrame] = None,
+    def compute_renewal_rate_kpi(
+        result_df: pd.DataFrame,
     ) -> Dict:
         """
-        KPI 2: Calidad promedio del desempeno de ayudantes.
-
-        Usa evaluaciones de los 2 semestres mas recientes.
+        KPI 2: Tasa de Renovacion de la Academia (TRA).
         """
         metadata = KPI_METADATA["kpi2"]
         no_data_response = {
@@ -146,78 +137,38 @@ class KPIReporter:
             "valor": None,
             "baseline": metadata["baseline"],
             "meta": metadata["meta"],
-            "estado": (
-                "PENDIENTE — columna 'Evaluacion' en hoja de Postulaciones "
-                "es la fuente de este KPI. Completar evaluaciones de ayudantes."
-            ),
+            "estado": "PENDIENTE — no se asignaron ayudantes.",
         }
 
-        if applications_df is None or applications_df.empty:
+        if result_df is None or result_df.empty:
             return no_data_response
 
-        df = applications_df.copy()
-        df.columns = [
-            re.sub(r"\s+", " ", str(c).strip().upper()) for c in df.columns
-        ]
-        rename_map = {"EVALUACIÓN": "EVALUACION", "PERÍODO": "PERIODO"}
-        df = df.rename(columns={
-            k: v for k, v in rename_map.items() if k in df.columns
-        })
-
-        if "EVALUACION" not in df.columns or "PERIODO" not in df.columns:
+        assigned = result_df[result_df["ASIGNADO"] == 1]
+        if assigned.empty:
             return no_data_response
 
-        df["EVALUACION"] = (
-            df["EVALUACION"].astype(str)
-            .str.replace(",", ".")
-            .pipe(pd.to_numeric, errors="coerce")
-        )
-        df["PERIODO"] = df["PERIODO"].astype(str).str.strip()
+        total_assigned = len(assigned)
+        new_assigned = int((assigned.get("N_VECES_AYUDANTE", pd.Series(dtype=float)).fillna(0) == 0).sum())
+        tra = new_assigned / total_assigned
 
-        if "ESTADO" in df.columns:
-            df = df[
-                df["ESTADO"].astype(str).str.strip().str.upper()
-                .isin(ACCEPTED_APPLICATION_STATES)
-            ]
-
-        df = df.dropna(subset=["EVALUACION"])
-        if df.empty:
-            return no_data_response
-
-        two_most_recent_periods = sorted(df["PERIODO"].unique())[-2:]
-        recent_evaluations = df[df["PERIODO"].isin(two_most_recent_periods)]
-
-        total_score = recent_evaluations["EVALUACION"].sum()
-        total_instances = len(recent_evaluations)
-        average_score = round(total_score / total_instances, 4)
-
-        if average_score >= 5.5:
-            status = "OPTIMO  (>= 5.5)"
-        elif average_score >= 5.0:
-            status = "SUFICIENTE (>= 5.0)"
+        if 0.25 <= tra <= 0.45:
+            status = "OPTIMO  (25% - 45%)"
+        elif tra < 0.25:
+            status = "INSUFICIENTE (< 25%)"
         else:
-            status = "INSUFICIENTE (< 5.0)"
+            status = "EXCESIVO (> 45%)"
 
-        score_by_period = {
-            period: round(
-                recent_evaluations[
-                    recent_evaluations["PERIODO"] == period
-                ]["EVALUACION"].mean(),
-                4,
-            )
-            for period in two_most_recent_periods
-        }
-
+        improvement = round(tra - metadata["baseline"], 4)
         return {
             "kpi": "KPI2",
             "nombre": metadata["nombre"],
             "formula": metadata["formula"],
-            "valor": average_score,
-            "semestres_usados": two_most_recent_periods,
-            "total_instancias": total_instances,
-            "promedio_por_semestre": score_by_period,
+            "valor": round(tra, 4),
+            "nuevos_asignados": new_assigned,
+            "total_asignados": total_assigned,
             "baseline": metadata["baseline"],
             "meta": metadata["meta"],
+            "mejora_vs_baseline": improvement,
             "estado": status,
         }
 
@@ -314,11 +265,11 @@ class KPIReporter:
         print(f"  Estado  : {kpi1.get('estado', 'N/A')}")
 
         # KPI 2
-        print("\n[KPI 2] Calidad promedio del desempeno de ayudantes")
-        print("  Formula : KPI2 = (SumPa_sem1 + SumPa_sem2) / total_instancias")
+        print("\n[KPI 2] Tasa de Renovacion de la Academia (TRA)")
+        print("  Formula : TRA = Nuevos_Asignados / Total_Asignados")
         v2 = kpi2.get("valor")
-        print(f"  Valor   : {f'{v2:.4f} / 7.0' if v2 is not None else 'N/A'}")
-        print(f"  Meta    : >= {kpi2.get('meta', 5.0)} (escala 1-7)")
+        print(f"  Valor   : {f'{v2*100:.1f}%' if v2 is not None else 'N/A'}")
+        print(f"  Meta    : 25% - 45%")
         print(f"  Estado  : {kpi2.get('estado', 'N/A')}")
 
         # KPI 3
